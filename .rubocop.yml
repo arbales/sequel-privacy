@@ -1,0 +1,28 @@
+AllCops:
+  TargetRubyVersion: 3.4
+  NewCops: enable
+  Exclude:
+    - sorbet/**/*
+    - vendor/**/*    
+Metrics:
+  Enabled: false
+Lint/UnderscorePrefixedVariableName:
+  Enabled: false
+Lint/AssignmentInCondition:
+  Enabled: false
+Style/BlockDelimiters:
+  Enabled: false
+Style/RedundantSelf:
+  Enabled: false
+Style/Lambda:
+  Enabled: false
+Style/LambdaCall:
+  EnforcedStyle: braces
+Style/AccessModifierDeclarations:
+  Enabled: false
+Style/FetchEnvVar:
+  AutoCorrect: disabled # or false
+Naming/BlockForwarding:
+  EnforcedStyle: explicit
+Style/ArgumentsForwarding:
+  Enabled: false
