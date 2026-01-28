@@ -103,15 +103,13 @@ Policies are lambdas that execute in the context of an `Actions` struct, giving 
 
 
 ```ruby
-# 0-arity: global decisions, works for anonymous
+
 policy :AlwaysAllow, -> { allow }
 
-# 1-arity: subject-only checks, works for anonymous
 policy :AllowIfPublished, ->(subject) {
   allow if subject.published
 }
 
-# 2-arity: requires actor, auto-deny for anonymous
 policy :AllowAdmins, ->(_subject, actor) {
   allow if actor.is_role?(:admin)
 }
@@ -120,9 +118,6 @@ policy :AllowOwner, ->(subject, actor) {
   allow if subject.owner_id == actor.id
 }
 
-# 3-arity: requires actor, auto-deny for anonymous
-# For operations like group.add_member(user) or group.remove_member(user)
-# where subject=group, actor=current_user, direct_object=target_user
 policy :AllowSelfJoin, ->(_group, actor, target_user) {
   allow if actor.id == target_user.id
 }
@@ -144,12 +139,12 @@ policy :AllowSelfRemove, ->(_group, actor, target_user) {
 policy :MyPolicy, ->() { ... },
   'Human-readable description',  # For logging
   cacheable: true,               # Cache results (default: true)
-  single_match: false            # Only one subject can match (optimization)
+  single_match: false            # Only one subject can match
 ```
 
 **`cacheable: true`** (default): Results are cached for the duration of the request, keyed by policy + arguments. Use for policies that don't depend on mutable state.
 
-**`single_match: true`**: Optimization for policies like "user can only see their own record." Once a match is found for an actor, the policy automatically returns `:pass` for other subjects.
+**`single_match: true`**: Optimization for policies for which there is only one matching Actor possible for a given Subject. For example in `AllowAuthors`, since a `Post` can have only one other, it's not worth a potentially expensive check on other combinations once you've found the winner. 
 
 ### Policy Combinators
 
