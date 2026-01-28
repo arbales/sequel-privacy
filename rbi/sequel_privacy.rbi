@@ -1,11 +1,4 @@
 # typed: true
-# Minimal RBI shim for sequel-privacy gem
-#
-# Most types are defined in the gem source files (typed: strict).
-# This shim only provides declarations for:
-# 1. Actions - defined in typed: ignore file
-# 2. DatasetMethods#model - inherited from Sequel::Dataset
-# 3. InstanceMethods @viewer_context - ivar declaration for mixin
 
 module Sequel
   module Privacy
@@ -26,7 +19,6 @@ module Sequel
       sig { params(policies: T.untyped).returns(T::Array[T.untyped]) }
       def all(*policies); end
 
-      # instance_exec with Policy (which extends Proc)
       sig {
         params(
           args: T.untyped,
@@ -35,10 +27,29 @@ module Sequel
       }
       def self.instance_exec(*args, &block); end
     end
+
+    class PrivacyDSL
+      extend T::Sig
+
+      sig { params(action: Symbol, policies: T.untyped).void }
+      def can(action, *policies); end
+
+      sig { params(field_name: Symbol, policies: T.untyped).void }
+      def field(field_name, *policies); end
+
+      sig { params(association_name: Symbol, blk: T.proc.void).void }
+      def association(association_name, &blk); end
+    end
   end
 
   module Plugins
     module Privacy
+      module ClassMethods
+        # The privacy block is evaluated in the context of PrivacyDSL
+        sig { params(blk: T.proc.bind(Sequel::Privacy::PrivacyDSL).void).void }
+        def privacy(&blk); end
+      end
+
       module InstanceMethods
         # Declare the @viewer_context instance variable for the mixin
         sig { returns(T.nilable(Sequel::Privacy::ViewerContext)) }

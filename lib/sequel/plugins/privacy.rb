@@ -17,12 +17,12 @@ module Sequel
     #   class Member < Sequel::Model
     #     plugin :privacy
     #
-    #     privacy P do
-    #       can :view, AllowSelf, AllowAdmins
-    #       can :edit, AllowSelf, AllowAdmins
+    #     privacy do
+    #       can :view, P::AllowSelf, P::AllowAdmins
+    #       can :edit, P::AllowSelf, P::AllowAdmins
     #
-    #       field :email, AllowSelf
-    #       field :phone, AllowSelf, AllowFriends
+    #       field :email, P::AllowSelf
+    #       field :phone, P::AllowSelf, P::AllowFriends
     #     end
     #   end
     #
@@ -91,10 +91,9 @@ module Sequel
       class PrivacyDSL
         extend T::Sig
 
-        sig { params(model_class: T.untyped, policy_module: T.untyped).void }
-        def initialize(model_class, policy_module = nil)
+        sig { params(model_class: T.untyped).void }
+        def initialize(model_class)
           @model_class = model_class
-          @policy_module = policy_module
         end
 
         # Define policies for an action
@@ -143,31 +142,10 @@ module Sequel
             case p
             when Sequel::Privacy::Policy, Proc
               p
-            when Symbol
-              if @policy_module&.const_defined?(p)
-                @policy_module.const_get(p)
-              else
-                Kernel.raise ArgumentError, "Unknown policy: #{p}"
-              end
             else
               Kernel.raise ArgumentError, "Invalid policy: #{p.inspect}"
             end
           end
-        end
-
-        # Allow bare constant names to resolve against the policy module
-        sig { params(name: Symbol, args: T.untyped).returns(T.untyped) }
-        def method_missing(name, *args)
-          if @policy_module&.const_defined?(name)
-            @policy_module.const_get(name)
-          else
-            super
-          end
-        end
-
-        sig { params(name: Symbol, include_private: T::Boolean).returns(T::Boolean) }
-        def respond_to_missing?(name, include_private = false)
-          (@policy_module&.const_defined?(name)) || super
         end
       end
 
@@ -267,24 +245,23 @@ module Sequel
           @privacy_finalized == true
         end
 
-        # New DSL entry point for defining privacy policies
+        # DSL entry point for defining privacy policies
         #
-        # @param policy_module [Module, nil] Optional module to import policy constants from
         # @yield Block evaluated in context of PrivacyDSL
         #
         # Example:
-        #   privacy P do
-        #     can :view, AllowMembers
-        #     can :edit, AllowSelf, AllowAdmins
-        #     field :email, AllowSelf
+        #   privacy do
+        #     can :view, P::AllowMembers
+        #     can :edit, P::AllowSelf, P::AllowAdmins
+        #     field :email, P::AllowSelf
         #   end
-        sig { params(policy_module: T.untyped, block: T.proc.void).void }
-        def privacy(policy_module = nil, &block)
+        sig { params(block: T.proc.void).void }
+        def privacy(&block)
           if privacy_finalized?
             Kernel.raise Sequel::Privacy::PrivacyAlreadyFinalizedError, "Privacy already finalized for #{self}"
           end
 
-          dsl = PrivacyDSL.new(self, policy_module)
+          dsl = PrivacyDSL.new(self)
           dsl.instance_eval(&block)
         end
 

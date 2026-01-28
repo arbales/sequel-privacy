@@ -19,7 +19,7 @@ Gem::Specification.new do |spec|
   spec.metadata['source_code_uri'] = spec.homepage
   spec.metadata['changelog_uri'] = "#{spec.homepage}/blob/main/CHANGELOG.md"
 
-  spec.files = Dir.glob('lib/**/*') + %w[README.md CHANGELOG.md LICENSE.txt]
+  spec.files = Dir.glob('lib/**/*') + Dir.glob('rbi/**/*.rbi') + %w[README.md CHANGELOG.md LICENSE.txt]
   spec.require_paths = ['lib']
 
   spec.add_dependency 'sequel', '~> 5.0'
