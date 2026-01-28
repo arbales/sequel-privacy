@@ -16,5 +16,8 @@ module Sequel
     class InvalidViewerContextError < StandardError; end
 
     class MissingViewerContext < StandardError; end
+
+    # Raised when attempting to modify privacy settings after finalization
+    class PrivacyAlreadyFinalizedError < StandardError; end
   end
 end

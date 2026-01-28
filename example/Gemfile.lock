@@ -1,0 +1,38 @@
+PATH
+  remote: ..
+  specs:
+    sequel-privacy (0.1.0)
+      sequel (~> 5.0)
+      sorbet-runtime (~> 0.5)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+    bigdecimal (4.0.1)
+    mini_portile2 (2.8.9)
+    nio4r (2.7.5)
+    puma (6.6.1)
+      nio4r (~> 2.0)
+    rack (3.2.4)
+    roda (3.100.0)
+      rack
+    sequel (5.100.0)
+      bigdecimal
+    sorbet-runtime (0.6.12897)
+    sqlite3 (1.7.3)
+      mini_portile2 (~> 2.8.0)
+
+PLATFORMS
+  arm64-darwin-25
+  ruby
+
+DEPENDENCIES
+  puma (~> 6.0)
+  rack (~> 3.0)
+  roda (~> 3.0)
+  sequel (~> 5.0)
+  sequel-privacy!
+  sqlite3 (~> 1.4)
+
+BUNDLED WITH
+   2.6.9

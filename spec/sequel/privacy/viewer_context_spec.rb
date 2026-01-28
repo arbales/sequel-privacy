@@ -32,25 +32,25 @@ RSpec.describe Sequel::Privacy::ViewerContext do
 
   describe '.all_powerful' do
     it 'creates an AllPowerfulVC' do
-      vc = described_class.all_powerful('testing')
+      vc = described_class.all_powerful(:testing)
       expect(vc).to be_a(Sequel::Privacy::AllPowerfulVC)
     end
 
     it 'stores the reason' do
-      vc = described_class.all_powerful('testing')
-      expect(vc.reason).to eq('testing')
+      vc = described_class.all_powerful(:testing)
+      expect(vc.reason).to eq(:testing)
     end
 
     it 'logs the creation' do
       logger = double('logger')
       allow(Sequel::Privacy).to receive(:logger).and_return(logger)
       expect(logger).to receive(:info).with(/Creating all-powerful viewer context: testing/)
-      described_class.all_powerful('testing')
+      described_class.all_powerful(:testing)
     end
 
     it 'does not fail when no logger is configured' do
       allow(Sequel::Privacy).to receive(:logger).and_return(nil)
-      expect { described_class.all_powerful('testing') }.not_to raise_error
+      expect { described_class.all_powerful(:testing) }.not_to raise_error
     end
   end
 end
@@ -69,7 +69,7 @@ RSpec.describe Sequel::Privacy::ActorVC do
 end
 
 RSpec.describe Sequel::Privacy::AllPowerfulVC do
-  let(:vc) { described_class.new('test reason') }
+  let(:vc) { described_class.new(:test_reason) }
 
   it 'is a ViewerContext' do
     expect(vc).to be_a(Sequel::Privacy::ViewerContext)
@@ -80,7 +80,7 @@ RSpec.describe Sequel::Privacy::AllPowerfulVC do
   end
 
   it 'stores the reason' do
-    expect(vc.reason).to eq('test reason')
+    expect(vc.reason).to eq(:test_reason)
   end
 
   it 'does not have an actor method' do

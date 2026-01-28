@@ -12,9 +12,6 @@ module Sequel
 
       sig { abstract.returns(Integer) }
       def id; end
-
-      sig { abstract.params(roles: Symbol).returns(T::Boolean) }
-      def is_role?(*roles); end
     end
   end
 end

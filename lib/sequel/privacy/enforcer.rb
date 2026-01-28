@@ -34,13 +34,18 @@ module Sequel
         ).returns(T::Boolean)
       end
       def self.enforce(policies, subject, viewer_context, direct_object = nil)
-        # All-powerful contexts bypass all checks
+        # All-powerful and omniscient contexts bypass all checks
         if viewer_context.is_a?(AllPowerfulVC)
           logger&.warn('BYPASS: All-powerful viewer context bypasses all privacy rules.')
           return true
         end
 
-        actor = T.cast(viewer_context, ActorVC).actor
+        if viewer_context.is_a?(OmniscientVC)
+          logger&.debug { "BYPASS: Omniscient viewer context (#{viewer_context.reason})" }
+          return true
+        end
+
+        actor = viewer_context.is_a?(ActorVC) ? viewer_context.actor : nil
 
         # Ensure we have policies to evaluate
         if policies.empty?
@@ -69,7 +74,7 @@ module Sequel
         params(
           policy: Policy,
           subject: TPolicySubject,
-          actor: IActor,
+          actor: T.nilable(IActor),
           viewer_context: ViewerContext,
           direct_object: T.nilable(Sequel::Model)
         ).returns(Integer)
@@ -79,7 +84,7 @@ module Sequel
         when 0
           [policy, viewer_context].hash
         when 1
-          [policy, actor, viewer_context].hash
+          [policy, subject, viewer_context].hash
         when 2
           [policy, subject, actor, viewer_context].hash
         else
@@ -98,7 +103,7 @@ module Sequel
         params(
           child_policies: TPolicyArray,
           subject: TPolicySubject,
-          actor: IActor,
+          actor: T.nilable(IActor),
           viewer_context: ViewerContext,
           direct_object: T.nilable(Sequel::Model)
         ).returns(Symbol)
@@ -123,7 +128,7 @@ module Sequel
         params(
           uncasted_policy: T.any(TPolicy, Proc),
           subject: TPolicySubject,
-          actor: IActor,
+          actor: T.nilable(IActor),
           viewer_context: ViewerContext,
           direct_object: T.nilable(Sequel::Model)
         ).returns(Symbol)
@@ -184,20 +189,25 @@ module Sequel
         params(
           policy: Policy,
           subject: TPolicySubject,
-          actor: IActor,
+          actor: T.nilable(IActor),
           direct_object: T.nilable(Sequel::Model)
         ).returns(T.untyped)
       end
       def self.execute_policy(policy, subject, actor, direct_object)
+        # 2+ arity policies require actor - auto-deny for anonymous
+        if !actor && policy.arity >= 2
+          return :deny
+        end
+
         case policy.arity
         when 0
           Actions.instance_exec(&policy)
         when 1
-          Actions.instance_exec(actor, &policy)
+          Actions.instance_exec(subject, &policy)
         when 2
-          Actions.instance_exec(subject, actor, &policy)
+          Actions.instance_exec(subject, T.must(actor), &policy)
         else
-          Actions.instance_exec(subject, actor, direct_object, &policy)
+          Actions.instance_exec(subject, T.must(actor), direct_object, &policy)
         end
       end
 
@@ -205,7 +215,7 @@ module Sequel
         params(
           policy: Policy,
           result: Symbol,
-          actor: IActor,
+          actor: T.nilable(IActor),
           subject: TPolicySubject,
           from_cache: T::Boolean,
           skipped: T::Boolean
@@ -214,8 +224,9 @@ module Sequel
       def self.log_result(policy, result, actor, subject, from_cache, skipped)
         return unless logger
 
+        actor_id = actor ? actor.id : 'anonymous'
         logger.debug do
-          msg = "#{result.to_s.upcase}: #{policy.policy_name || 'anonymous'} for actor[#{actor.id}] on #{subject.class}[#{subject_id(subject)}]"
+          msg = "#{result.to_s.upcase}: #{policy.policy_name || 'anonymous'} for actor[#{actor_id}] on #{subject.class}[#{subject_id(subject)}]"
           msg += " (cached)" if from_cache
           msg += " (skipped: single_match)" if skipped
           msg

@@ -8,7 +8,7 @@ RSpec.describe Sequel::Plugins::Privacy do
   let(:admin_actor) { TestActor.new(2, roles: [:admin]) }
   let(:vc) { Sequel::Privacy::ViewerContext.for_actor(actor) }
   let(:admin_vc) { Sequel::Privacy::ViewerContext.for_actor(admin_actor) }
-  let(:all_powerful_vc) { Sequel::Privacy::ViewerContext.all_powerful('testing') }
+  let(:all_powerful_vc) { Sequel::Privacy::ViewerContext.all_powerful(:testing) }
 
   # Create test table and model for these specs
   before(:all) do
@@ -40,7 +40,7 @@ RSpec.describe Sequel::Plugins::Privacy do
   end
 
   let(:allow_admin_policy) do
-    Sequel::Privacy::Policy.create(:allow_admin, ->(actor) {
+    Sequel::Privacy::Policy.create(:allow_admin, ->(_subject, actor) {
       allow if actor.is_role?(:admin)
     })
   end
@@ -68,12 +68,21 @@ RSpec.describe Sequel::Plugins::Privacy do
         expect(test_class.privacy_policies[:view].length).to eq(3)
       end
 
-      it 'raises error when redefining policies' do
+      it 'allows merging policies for the same action' do
+        original_count = test_class.privacy_policies[:view].length
+        test_class.class_eval do
+          policies :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+        end
+        expect(test_class.privacy_policies[:view].length).to eq(original_count + 1)
+      end
+
+      it 'raises error when finalized' do
+        test_class.finalize_privacy!
         expect {
           test_class.class_eval do
             policies :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
           end
-        }.to raise_error(/Cannot redefine policies/)
+        }.to raise_error(/Privacy already finalized/)
       end
 
       it 'allows different actions to have different policies' do
@@ -130,6 +139,81 @@ RSpec.describe Sequel::Plugins::Privacy do
         ds = simple_class.for_vc(vc)
         expect(ds).to be_a(Sequel::Dataset)
         expect(ds.opts[:viewer_context]).to eq(vc)
+      end
+    end
+
+    describe '.privacy' do
+      let(:allow_owner_p) do
+        Sequel::Privacy::Policy.create(:allow_owner, ->(subject, actor) {
+          allow if subject.owner_id == actor.id
+        })
+      end
+
+      let(:allow_admin_p) do
+        Sequel::Privacy::Policy.create(:allow_admin, ->(actor) {
+          allow if actor.is_role?(:admin)
+        })
+      end
+
+      it 'defines policies using the new DSL' do
+        ao = allow_owner_p
+        aa = allow_admin_p
+        test_class = Class.new(Sequel::Model(:privacy_test_items)) do
+          plugin :privacy
+        end
+        test_class.privacy do
+          can :view, ao, aa
+          can :edit, ao
+        end
+
+        expect(test_class.privacy_policies[:view].length).to eq(2)
+        expect(test_class.privacy_policies[:edit].length).to eq(1)
+      end
+
+      it 'allows multiple privacy blocks to merge' do
+        ao = allow_owner_p
+        aa = allow_admin_p
+        test_class = Class.new(Sequel::Model(:privacy_test_items)) do
+          plugin :privacy
+        end
+        test_class.privacy do
+          can :view, ao
+        end
+        test_class.privacy do
+          can :view, aa
+        end
+
+        expect(test_class.privacy_policies[:view].length).to eq(2)
+      end
+
+      it 'defines protected fields' do
+        ao = allow_owner_p
+        test_class = Class.new(Sequel::Model(:privacy_test_items)) do
+          plugin :privacy
+        end
+        test_class.privacy do
+          field :secret_field, ao
+        end
+
+        expect(test_class.privacy_fields[:secret_field]).to eq(:view_secret_field)
+        expect(test_class.privacy_policies[:view_secret_field].length).to eq(1)
+      end
+
+      it 'prevents changes after finalization' do
+        ao = allow_owner_p
+        test_class = Class.new(Sequel::Model(:privacy_test_items)) do
+          plugin :privacy
+        end
+        test_class.privacy do
+          can :view, ao
+          finalize!
+        end
+
+        expect {
+          test_class.privacy do
+            can :edit, ao
+          end
+        }.to raise_error(/Privacy already finalized/)
       end
     end
   end
@@ -686,6 +770,235 @@ RSpec.describe Sequel::Plugins::Privacy do
 
         expect { parent.allow?(vc, :view) }.to raise_error('Policy error')
         expect(parent.viewer_context).to eq(vc)
+      end
+    end
+
+    describe 'association privacy DSL' do
+      # Create tables for association privacy tests
+      before(:all) do
+        DB.create_table?(:privacy_groups) do
+          primary_key :id
+          String :name
+        end
+
+        DB.create_table?(:privacy_group_members) do
+          primary_key :id
+          Integer :group_id
+          Integer :user_id
+        end
+
+        DB.create_table?(:privacy_users) do
+          primary_key :id
+          String :name
+          String :role, default: 'member'
+        end
+      end
+
+      after(:all) do
+        DB.drop_table?(:privacy_group_members)
+        DB.drop_table?(:privacy_groups)
+        DB.drop_table?(:privacy_users)
+      end
+
+      before(:each) do
+        DB[:privacy_group_members].delete
+        DB[:privacy_groups].delete
+        DB[:privacy_users].delete
+      end
+
+      # 3-arity policies for testing
+      let(:allow_self_add) do
+        Sequel::Privacy::Policy.create(:allow_self_add, ->(_group, actor, target_user) {
+          allow if actor.id == target_user.id
+        })
+      end
+
+      let(:allow_self_remove) do
+        Sequel::Privacy::Policy.create(:allow_self_remove, ->(_group, actor, target_user) {
+          allow if actor.id == target_user.id
+        })
+      end
+
+      let(:allow_admin_action) do
+        Sequel::Privacy::Policy.create(:allow_admin_action, ->(_group, actor, _target) {
+          allow if actor.is_role?(:admin)
+        })
+      end
+
+      let(:allow_admin_remove_all) do
+        Sequel::Privacy::Policy.create(:allow_admin_remove_all, ->(_group, actor) {
+          allow if actor.is_role?(:admin)
+        })
+      end
+
+      let(:user_class) do
+        Class.new(Sequel::Model(:privacy_users)) do
+          include Sequel::Privacy::IActor
+          plugin :privacy
+          allow_unsafe_access!
+
+          privacy do
+            can :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+          end
+
+          def is_role?(*roles)
+            roles.map(&:to_s).include?(self[:role])
+          end
+        end
+      end
+
+      let(:group_class) do
+        self_add = allow_self_add
+        self_remove = allow_self_remove
+        admin_action = allow_admin_action
+        admin_remove_all = allow_admin_remove_all
+        user_klass = user_class
+        deny = deny_policy
+
+        Class.new(Sequel::Model(:privacy_groups)) do
+          plugin :privacy
+          allow_unsafe_access!
+
+          many_to_many :members, class: user_klass,
+            join_table: :privacy_group_members,
+            left_key: :group_id,
+            right_key: :user_id
+
+          privacy do
+            can :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+
+            association :members do
+              can :add, admin_action, self_add
+              can :remove, admin_action, self_remove
+              can :remove_all, admin_remove_all
+            end
+          end
+        end
+      end
+
+      describe 'add_* method' do
+        it 'allows user to add themselves' do
+          user = user_class.create(name: 'Test User', role: 'member')
+          group = group_class.create(name: 'Test Group')
+
+          user_vc = Sequel::Privacy::ViewerContext.for_actor(user)
+          group.for_vc(user_vc)
+
+          expect { group.add_member(user) }.not_to raise_error
+          expect(group.members.map(&:id)).to include(user.id)
+        end
+
+        it 'denies user from adding another user' do
+          user1 = user_class.create(name: 'User 1', role: 'member')
+          user2 = user_class.create(name: 'User 2', role: 'member')
+          group = group_class.create(name: 'Test Group')
+
+          user1_vc = Sequel::Privacy::ViewerContext.for_actor(user1)
+          group.for_vc(user1_vc)
+
+          expect { group.add_member(user2) }.to raise_error(Sequel::Privacy::Unauthorized)
+        end
+
+        it 'allows admin to add any user' do
+          admin = user_class.create(name: 'Admin', role: 'admin')
+          user = user_class.create(name: 'User', role: 'member')
+          group = group_class.create(name: 'Test Group')
+
+          admin_vc = Sequel::Privacy::ViewerContext.for_actor(admin)
+          group.for_vc(admin_vc)
+
+          expect { group.add_member(user) }.not_to raise_error
+          expect(group.members.map(&:id)).to include(user.id)
+        end
+
+        it 'raises MissingViewerContext without VC' do
+          user = user_class.create(name: 'Test User', role: 'member')
+          group = group_class.create(name: 'Test Group')
+
+          expect { group.add_member(user) }.to raise_error(Sequel::Privacy::MissingViewerContext)
+        end
+
+        it 'raises Unauthorized with OmniscientVC' do
+          user = user_class.create(name: 'Test User', role: 'member')
+          group = group_class.create(name: 'Test Group')
+
+          omni_vc = Sequel::Privacy::ViewerContext.omniscient(:test)
+          group.for_vc(omni_vc)
+
+          expect { group.add_member(user) }.to raise_error(Sequel::Privacy::Unauthorized)
+        end
+      end
+
+      describe 'remove_* method' do
+        it 'allows user to remove themselves' do
+          user = user_class.create(name: 'Test User', role: 'member')
+          group = group_class.create(name: 'Test Group')
+          # Add member directly via join table for setup
+          DB[:privacy_group_members].insert(group_id: group.id, user_id: user.id)
+
+          user_vc = Sequel::Privacy::ViewerContext.for_actor(user)
+          group.for_vc(user_vc)
+
+          expect { group.remove_member(user) }.not_to raise_error
+          expect(group.members.map(&:id)).not_to include(user.id)
+        end
+
+        it 'denies user from removing another user' do
+          user1 = user_class.create(name: 'User 1', role: 'member')
+          user2 = user_class.create(name: 'User 2', role: 'member')
+          group = group_class.create(name: 'Test Group')
+          # Add member directly via join table for setup
+          DB[:privacy_group_members].insert(group_id: group.id, user_id: user2.id)
+
+          user1_vc = Sequel::Privacy::ViewerContext.for_actor(user1)
+          group.for_vc(user1_vc)
+
+          expect { group.remove_member(user2) }.to raise_error(Sequel::Privacy::Unauthorized)
+        end
+
+        it 'allows admin to remove any user' do
+          admin = user_class.create(name: 'Admin', role: 'admin')
+          user = user_class.create(name: 'User', role: 'member')
+          group = group_class.create(name: 'Test Group')
+          # Add member directly via join table for setup
+          DB[:privacy_group_members].insert(group_id: group.id, user_id: user.id)
+
+          admin_vc = Sequel::Privacy::ViewerContext.for_actor(admin)
+          group.for_vc(admin_vc)
+
+          expect { group.remove_member(user) }.not_to raise_error
+          expect(group.members.map(&:id)).not_to include(user.id)
+        end
+      end
+
+      describe 'remove_all_* method' do
+        it 'allows admin to remove all members' do
+          admin = user_class.create(name: 'Admin', role: 'admin')
+          user1 = user_class.create(name: 'User 1', role: 'member')
+          user2 = user_class.create(name: 'User 2', role: 'member')
+          group = group_class.create(name: 'Test Group')
+          # Add members directly via join table for setup
+          DB[:privacy_group_members].insert(group_id: group.id, user_id: user1.id)
+          DB[:privacy_group_members].insert(group_id: group.id, user_id: user2.id)
+
+          admin_vc = Sequel::Privacy::ViewerContext.for_actor(admin)
+          group.for_vc(admin_vc)
+
+          expect { group.remove_all_members }.not_to raise_error
+          expect(group.members).to be_empty
+        end
+
+        it 'denies non-admin from removing all members' do
+          user = user_class.create(name: 'User', role: 'member')
+          group = group_class.create(name: 'Test Group')
+          # Add member directly via join table for setup
+          DB[:privacy_group_members].insert(group_id: group.id, user_id: user.id)
+
+          user_vc = Sequel::Privacy::ViewerContext.for_actor(user)
+          group.for_vc(user_vc)
+
+          expect { group.remove_all_members }.to raise_error(Sequel::Privacy::Unauthorized)
+        end
       end
     end
   end

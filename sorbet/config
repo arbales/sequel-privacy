@@ -3,5 +3,6 @@
 --ignore=tmp/
 --ignore=vendor/
 --ignore=spec/
+--ignore=example/
 --enable-experimental-requires-ancestor
 --suppress-payload-superclass-redefinition-for=Reline::ANSI

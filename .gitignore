@@ -1,0 +1,10 @@
+.DS_Store
+*.gem
+pkg/
+.ruby-lsp/
+coverage/
+.rspec_status
+tmp/
+*.tmp
+*.log
+example/example.db

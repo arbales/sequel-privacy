@@ -5,7 +5,9 @@ require 'spec_helper'
 
 RSpec.describe Sequel::Privacy::Enforcer do
   let(:actor) { TestActor.new(1) }
+  let(:admin_actor) { TestActor.new(2, roles: [:admin]) }
   let(:vc) { Sequel::Privacy::ViewerContext.for_actor(actor) }
+  let(:admin_vc) { Sequel::Privacy::ViewerContext.for_actor(admin_actor) }
   let(:subject_obj) { double('subject', id: 100, class: 'TestSubject') }
 
   let(:allow_policy) { Sequel::Privacy::BuiltInPolicies::AlwaysAllow }
@@ -14,7 +16,7 @@ RSpec.describe Sequel::Privacy::Enforcer do
 
   describe '.enforce' do
     context 'with AllPowerfulVC' do
-      let(:all_powerful_vc) { Sequel::Privacy::ViewerContext.all_powerful('testing') }
+      let(:all_powerful_vc) { Sequel::Privacy::ViewerContext.all_powerful(:testing) }
 
       it 'always returns true' do
         result = described_class.enforce([deny_policy], subject_obj, all_powerful_vc)
@@ -50,15 +52,15 @@ RSpec.describe Sequel::Privacy::Enforcer do
     end
 
     context 'with policy arguments' do
-      it 'passes actor to 1-arity policies' do
-        received_actor = nil
-        policy = Sequel::Privacy::Policy.create(:check_actor, ->(a) {
-          received_actor = a
+      it 'passes subject to 1-arity policies' do
+        received_subject = nil
+        policy = Sequel::Privacy::Policy.create(:check_subject, ->(s) {
+          received_subject = s
           allow
         })
 
         described_class.enforce([policy, deny_policy], subject_obj, vc)
-        expect(received_actor).to eq(actor)
+        expect(received_subject).to eq(subject_obj)
       end
 
       it 'passes subject and actor to 2-arity policies' do
@@ -88,6 +90,43 @@ RSpec.describe Sequel::Privacy::Enforcer do
         expect(received_args[0]).to eq(subject_obj)
         expect(received_args[1]).to eq(actor)
         expect(received_args[2]).to eq(direct_obj)
+      end
+
+      context 'with anonymous viewer context' do
+        let(:anon_vc) { Sequel::Privacy::ViewerContext.anonymous }
+
+        it 'allows 0-arity policies for anonymous' do
+          result = described_class.enforce([allow_policy, deny_policy], subject_obj, anon_vc)
+          expect(result).to be true
+        end
+
+        it 'allows 1-arity policies for anonymous' do
+          policy = Sequel::Privacy::Policy.create(:check_subject, ->(s) {
+            allow if s.id == 100
+          })
+
+          result = described_class.enforce([policy, deny_policy], subject_obj, anon_vc)
+          expect(result).to be true
+        end
+
+        it 'auto-denies 2-arity policies for anonymous' do
+          policy = Sequel::Privacy::Policy.create(:check_both, ->(s, a) {
+            allow # Would allow if called
+          })
+
+          result = described_class.enforce([policy, deny_policy], subject_obj, anon_vc)
+          expect(result).to be false
+        end
+
+        it 'auto-denies 3-arity policies for anonymous' do
+          direct_obj = TestModel.new(name: 'direct')
+          policy = Sequel::Privacy::Policy.create(:check_all, ->(s, a, d) {
+            allow # Would allow if called
+          })
+
+          result = described_class.enforce([policy, deny_policy], subject_obj, anon_vc, direct_obj)
+          expect(result).to be false
+        end
       end
     end
 
@@ -165,6 +204,85 @@ RSpec.describe Sequel::Privacy::Enforcer do
         expect {
           described_class.enforce([policy, deny_policy], subject_obj, vc)
         }.to raise_error(Sequel::Privacy::InvalidPolicyOutcomeError)
+      end
+    end
+
+    context 'with 3-arity policies (direct object)' do
+      let(:membership) { double('membership', user_id: 1, group_id: 10, class: 'GroupMembership') }
+      let(:other_membership) { double('other_membership', user_id: 99, group_id: 10, class: 'GroupMembership') }
+      let(:group) { TestModel.new(name: 'Test Group') }
+
+      # Policy: allow user to remove their own membership
+      let(:allow_self_membership) do
+        Sequel::Privacy::Policy.create(:allow_self_membership, ->(m, a, _g) {
+          allow if m.user_id == a.id
+        }, single_match: true)
+      end
+
+      # Policy: allow admins to remove any membership
+      let(:allow_admin_delete) do
+        Sequel::Privacy::Policy.create(:allow_admin_delete, ->(_m, a, _g) {
+          allow if a.is_role?(:admin)
+        })
+      end
+
+      it 'allows user to delete their own membership' do
+        result = described_class.enforce(
+          [allow_self_membership, deny_policy],
+          membership,
+          vc,
+          group
+        )
+        expect(result).to be true
+      end
+
+      it 'denies user from deleting another users membership' do
+        result = described_class.enforce(
+          [allow_self_membership, deny_policy],
+          other_membership,
+          vc,
+          group
+        )
+        expect(result).to be false
+      end
+
+      it 'allows admin to delete any membership' do
+        result = described_class.enforce(
+          [allow_self_membership, allow_admin_delete, deny_policy],
+          other_membership,
+          admin_vc,
+          group
+        )
+        expect(result).to be true
+      end
+
+      it 'combines policies correctly for delete permission' do
+        # User can delete own membership
+        result1 = described_class.enforce(
+          [allow_self_membership, allow_admin_delete, deny_policy],
+          membership,
+          vc,
+          group
+        )
+        expect(result1).to be true
+
+        # User cannot delete others membership (not admin)
+        result2 = described_class.enforce(
+          [allow_self_membership, allow_admin_delete, deny_policy],
+          other_membership,
+          vc,
+          group
+        )
+        expect(result2).to be false
+
+        # Admin can delete any membership
+        result3 = described_class.enforce(
+          [allow_self_membership, allow_admin_delete, deny_policy],
+          other_membership,
+          admin_vc,
+          group
+        )
+        expect(result3).to be true
       end
     end
 

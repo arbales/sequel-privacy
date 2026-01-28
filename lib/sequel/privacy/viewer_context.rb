@@ -24,10 +24,25 @@ module Sequel
 
       # Create an all-powerful viewer context that bypasses all privacy checks.
       # Use sparingly and always provide a reason for audit logging.
-      sig { params(reason: String).returns(AllPowerfulVC) }
+      sig { params(reason: Symbol).returns(AllPowerfulVC) }
       def self.all_powerful(reason)
         Sequel::Privacy.logger&.info("Creating all-powerful viewer context: #{reason}")
         AllPowerfulVC.new(reason)
+      end
+
+      # Create an omniscient viewer context that can see everything but cannot mutate.
+      # Used for system operations like authentication lookups.
+      sig { params(reason: Symbol).returns(OmniscientVC) }
+      def self.omniscient(reason)
+        Sequel::Privacy.logger&.debug("Creating omniscient viewer context: #{reason}")
+        OmniscientVC.new(reason)
+      end
+
+      # Create an anonymous viewer context for logged-out users.
+      # Subject to normal policy evaluation with no actor.
+      sig { returns(AnonymousVC) }
+      def self.anonymous
+        AnonymousVC.new
       end
     end
 
@@ -54,14 +69,40 @@ module Sequel
     class AllPowerfulVC < ViewerContext
       extend T::Sig
 
-      sig { params(reason: String).void }
+      sig { params(reason: Symbol).void }
       def initialize(reason)
-        @reason = T.let(reason, String)
+        @reason = T.let(reason, Symbol)
         super()
       end
 
-      sig { returns(String) }
+      sig { returns(Symbol) }
       attr_reader :reason
+    end
+
+    # Omniscient viewer context that can see everything but cannot mutate.
+    # Used for system operations like authentication lookups.
+    class OmniscientVC < ViewerContext
+      extend T::Sig
+
+      sig { params(reason: Symbol).void }
+      def initialize(reason)
+        @reason = T.let(reason, Symbol)
+        super()
+      end
+
+      sig { returns(Symbol) }
+      attr_reader :reason
+    end
+
+    # Anonymous viewer context for logged-out users.
+    # Has no actor - policies with arity >= 1 will auto-deny.
+    class AnonymousVC < ViewerContext
+      extend T::Sig
+
+      sig { void }
+      def initialize
+        super()
+      end
     end
 
     # Internal policy evaluation viewer context.
