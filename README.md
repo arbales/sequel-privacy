@@ -393,19 +393,24 @@ end
 
 ## Type Safety (Sorbet)
 
-The gem is mostly fully typed with Sorbet. Type definitions are provided for all public APIs.
+The gem is mostly fully typed with Sorbet. Type definitions are provided for all public APIs. To ensure 
+that Tapioca imports the required definitions, you may need to add this to your `sorbet/tapioca/require.rb`:
+
+```ruby
+require "sequel-privacy"
+require "sequel/plugins/privacy"
+
+# Force Tapioca to see the plugin modules by applying them to a dummy class
+Class.new(Sequel::Model) do
+  plugin :privacy
+end
+```
 
 ## AI Statement
 
 The core of this project was written by me (arbales) over the course of 2025 for a platform that
 manages mailing lists and member information for a social group. Claude assisted substantially with
 extracting it into a Gem and wrote the tests in their entirety.
-
-## TODO
-
-I'd like to support generation of Sorbet signatures on models that use the plugin so that 
-Sorbet users don't have to shim their models to use it. In my own work, I've shimmed my 
-base model class, but this isn't ideal. 
 
 ## License
 

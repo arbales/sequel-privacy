@@ -614,21 +614,20 @@ module Sequel
         requires_ancestor { Sequel::Model }
         mixes_in_class_methods(ClassMethods)
 
-
         sig { returns(T.nilable(Sequel::Privacy::ViewerContext)) }
         def viewer_context
-          @viewer_context
+          @viewer_context = T.let(@viewer_context, T.nilable(Sequel::Privacy::ViewerContext))
         end
 
         sig { params(vc: T.nilable(Sequel::Privacy::ViewerContext)).returns(T.nilable(Sequel::Privacy::ViewerContext)) }
         def viewer_context=(vc)
-          @viewer_context = vc
+          @viewer_context = T.let(vc, T.nilable(Sequel::Privacy::ViewerContext))
         end
 
         # Attach a viewer context to this model instance
         sig { params(vc: Sequel::Privacy::ViewerContext).returns(T.self_type) }
         def for_vc(vc)
-          @viewer_context = vc
+          @viewer_context = T.let(vc, T.nilable(Sequel::Privacy::ViewerContext))
           self
         end
 
@@ -657,19 +656,19 @@ module Sequel
           # without filtering, allowing policies to check things like "is actor a
           # member of this list?" by accessing list.members without recursively
           # checking each member's :view policy.
-          saved_vc = @viewer_context
-          @viewer_context = Sequel::Privacy::InternalPolicyEvaluationVC.new
+          saved_vc = viewer_context
+          self.viewer_context = Sequel::Privacy::InternalPolicyEvaluationVC.new
           begin
             Sequel::Privacy::Enforcer.enforce(policies, self, vc, direct_object)
           ensure
-            @viewer_context = saved_vc
+            self.viewer_context = saved_vc
           end
         end
 
         # Override save to check privacy policies
         sig { params(opts: T.untyped).returns(T.nilable(T.self_type)) }
         def save(*opts)
-          vc = @viewer_context
+          vc = viewer_context
 
           if vc.is_a?(Sequel::Privacy::OmniscientVC)
             Kernel.raise Sequel::Privacy::Unauthorized, "Cannot mutate with OmniscientVC"
@@ -700,7 +699,7 @@ module Sequel
         # Override update to check privacy policies
         sig { params(hash: T::Hash[Symbol, T.untyped]).returns(T.self_type) }
         def update(hash)
-          vc = @viewer_context
+          vc = viewer_context
           if vc
             unless allow?(vc, :edit)
               Kernel.raise Sequel::Privacy::Unauthorized, "Cannot edit #{self.class}"
@@ -723,7 +722,7 @@ module Sequel
         # Override delete to block OmniscientVC
         sig { returns(T.self_type) }
         def delete
-          if @viewer_context.is_a?(Sequel::Privacy::OmniscientVC)
+          if viewer_context.is_a?(Sequel::Privacy::OmniscientVC)
             Kernel.raise Sequel::Privacy::Unauthorized, "Cannot delete with OmniscientVC"
           end
           super
