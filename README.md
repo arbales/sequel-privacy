@@ -77,7 +77,8 @@ The `privacy` block provides:
 - `field :name, *policies` - Protect a field (auto-creates `:view_#{field}` policy)
 - `finalize!` - Prevent further modifications to privacy settings
 
-`AlwaysDeny` is automatically appended to all policy chains (fail-secure by default).
+`AlwaysDeny` is automatically appended to all policy chains if you don't include it, but it's better to add it explictly.
+This behavior may change. 
 
 ### 3. Query with Privacy Enforcement
 
@@ -85,8 +86,13 @@ The `privacy` block provides:
 # Create a viewer context
 vc = Sequel::Privacy::ViewerContext.for_actor(current_user)
 
-# Query - results are automatically filtered by :view policy
-members = Member.for_vc(vc).where(org_id: 1).all
+# Results will filter out records that your VC can't see.
+members = Member.for_vc(vc).where(org_id: current_user.org_id).all
+
+# But DON'T rely on the privacy checker in place of refining your query
+# with privacy/permissions in-mind.
+my_groups = Group.for_vc(vc).all # DONT: This results on tons of records being returned, processed and filtered for no reason.
+my_groups = Group.for_vc(vc).where(creator: current_user).all # DO
 
 # Check permissions explicitly
 member.allow?(vc, :view)  # => true/false
@@ -114,17 +120,33 @@ policy :AllowAdmins, ->(_subject, actor) {
   allow if actor.is_role?(:admin)
 }
 
-policy :AllowOwner, ->(subject, actor) {
+policy :AllowOwner, ->(_subject, actor) {
   allow if subject.owner_id == actor.id
 }
 
-policy :AllowSelfJoin, ->(_group, actor, target_user) {
-  allow if actor.id == target_user.id
+policy :AllowIfDirectObjectIsActor, ->(_subject, actor, direct_object) {
+  allow if actor.id == direct_object.id
 }
 
-policy :AllowSelfRemove, ->(_group, actor, target_user) {
-  allow if actor.id == target_user.id
-}
+```
+
+If you have lots of different objects and want to make your policies more specific, you can define policies in 
+different modules.
+
+```ruby
+module P
+  module Groups
+    extend Sequel::Privacy::PolicyDSL
+    
+    policy :AllowIfOpen, -> (subject, _actor) {
+      allow if subject.open?
+    }
+    
+    policy :AllowIfMember, -> (subject, actor) {
+      allow if subject.includes_member? actor
+    }      
+  end
+end
 ```
 
 ### Policy Return Values
@@ -151,7 +173,13 @@ policy :MyPolicy, ->() { ... },
 Use `all()` to require multiple conditions:
 
 ```ruby
-policy :AllowMemberToRemoveSelf, ->(subject, actor, direct_object) {
+policy :AllowAddSelfToOpenGroup, ->(subject, actor, direct_object) {
+  all(
+    P::AllowIfGroupIsOpen    
+    P::AllowIfDirectObjectIsActor
+  )
+}
+policy :AllowRemoveSelf, ->(subject, actor, direct_object) {
   all(
     P::AllowIfIncludesMember,
     P::AllowIfDirectObjectIsActor
@@ -251,7 +279,7 @@ The `association` block supports three actions:
 - `:remove` - Wraps `remove_*` method (e.g., `remove_member`)
 - `:remove_all` - Wraps `remove_all_*` method (e.g., `remove_all_members`)
 
-Association policies use 3-arity, receiving `(subject, actor, direct_object)`:
+The `:add` and `:remove` policies use 3-arity, receiving `(subject, actor, direct_object)`:
 - `subject` - The model instance (e.g., the group)
 - `actor` - The current user from the viewer context
 - `direct_object` - The object being added/removed (e.g., the user being added to the group)
@@ -358,11 +386,6 @@ class Member < Sequel::Model
 end
 ```
 
-The interface requires:
-- `id` - Returns the actor's unique identifier
-
-You can add additional methods like `is_role?` for use in your policies, but they are not required by the interface.
-
 ## Policy Inheritance
 
 Child classes inherit privacy policies from their parents:
@@ -386,7 +409,7 @@ end
 
 ## Built-in Policies
 
-- `Sequel::Privacy::BuiltInPolicies::AlwaysDeny` - Always denies (fail-secure default)
+- `Sequel::Privacy::BuiltInPolicies::AlwaysDeny` - Always denies; add it to the end of your policy chains.
 - `Sequel::Privacy::BuiltInPolicies::AlwaysAllow` - Always allows
 - `Sequel::Privacy::BuiltInPolicies::PassAndLog` - Passes with a log message (useful for debugging)
 

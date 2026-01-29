@@ -56,7 +56,10 @@ module Sequel
       class AssociationPrivacyDSL
         extend T::Sig
 
-        sig { params(model_class: T.untyped, assoc_name: Symbol, policy_resolver: T.proc.params(policies: T::Array[T.untyped]).returns(T::Array[T.untyped])).void }
+        sig {
+          params(model_class: T.untyped, assoc_name: Symbol,
+                 policy_resolver: T.proc.params(policies: T::Array[T.untyped]).returns(T::Array[T.untyped])).void
+        }
         def initialize(model_class, assoc_name, policy_resolver)
           @model_class = model_class
           @assoc_name = assoc_name
@@ -68,7 +71,8 @@ module Sequel
         sig { params(action: Symbol, policies: T.untyped).void }
         def can(action, *policies)
           unless %i[add remove remove_all].include?(action)
-            Kernel.raise ArgumentError, "Association action must be :add, :remove, or :remove_all, got #{action.inspect}"
+            Kernel.raise ArgumentError,
+                         "Association action must be :add, :remove, or :remove_all, got #{action.inspect}"
           end
 
           resolved = @policy_resolver.call(policies)
@@ -198,7 +202,7 @@ module Sequel
 
           unless vc || allow_unsafe_access?
             Kernel.raise Sequel::Privacy::MissingViewerContext,
-              "#{self} requires a ViewerContext. Use #{self}.for_vc(vc) or call #{self}.allow_unsafe_access!"
+                         "#{self} requires a ViewerContext. Use #{self}.for_vc(vc) or call #{self}.allow_unsafe_access!"
           end
 
           # Create the instance via parent chain
@@ -209,11 +213,9 @@ module Sequel
             instance.instance_variable_set(:@viewer_context, vc)
 
             # Check :view policy (skip for InternalPolicyEvaluationVC - used during policy evaluation)
-            unless vc.is_a?(Sequel::Privacy::InternalPolicyEvaluationVC)
-              unless instance.allow?(vc, :view)
-                Sequel::Privacy.logger&.debug { "Privacy denied :view on #{self}[#{instance.pk}]" }
-                return nil # Filtered out
-              end
+            if !vc.is_a?(Sequel::Privacy::InternalPolicyEvaluationVC) && !instance.allow?(vc, :view)
+              Sequel::Privacy.logger&.debug { "Privacy denied :view on #{self}[#{instance.pk}]" }
+              return nil # Filtered out
             end
           end
 
@@ -295,7 +297,7 @@ module Sequel
             # Require VC for protected field access
             unless vc
               Kernel.raise Sequel::Privacy::MissingViewerContext,
-                "#{self.class}##{field} requires a ViewerContext"
+                           "#{self.class}##{field} requires a ViewerContext"
             end
 
             value = original_method.bind(self).call
@@ -316,9 +318,7 @@ module Sequel
         # @param defer_setup [Boolean] If true, don't set up wrappers yet (caller will call setup_association_privacy)
         sig { params(assoc_name: Symbol, action: Symbol, policies: T::Array[T.untyped], defer_setup: T::Boolean).void }
         def register_association_policies(assoc_name, action, policies, defer_setup: false)
-          if privacy_finalized?
-            Kernel.raise "Privacy policies have been finalized for #{self}"
-          end
+          Kernel.raise "Privacy policies have been finalized for #{self}" if privacy_finalized?
 
           privacy_association_policies[assoc_name] ||= {}
           assoc_hash = T.must(privacy_association_policies[assoc_name])
@@ -342,6 +342,7 @@ module Sequel
           # Track which associations have been wrapped to avoid double-wrapping
           @_wrapped_associations ||= T.let({}, T.nilable(T::Hash[Symbol, T::Boolean]))
           return if @_wrapped_associations[assoc_name]
+
           @_wrapped_associations[assoc_name] = true
 
           # Determine the singular name for method naming
@@ -363,9 +364,9 @@ module Sequel
 
           # Wrap remove_all_* method if :remove_all policy exists
           remove_all_policies = assoc_policies[:remove_all]
-          if remove_all_policies && method_defined?(:"remove_all_#{reflection[:name]}")
-            _wrap_association_remove_all(assoc_name, reflection[:name], remove_all_policies)
-          end
+          return unless remove_all_policies && method_defined?(:"remove_all_#{reflection[:name]}")
+
+          _wrap_association_remove_all(assoc_name, reflection[:name], remove_all_policies)
         end
 
         # Finalize privacy settings (no more changes allowed)
@@ -440,17 +441,17 @@ module Sequel
 
             # Load association with VC context set if available
             obj = if vc && assoc_class.respond_to?(:privacy_vc_key)
-              vc_key = assoc_class.privacy_vc_key
-              old_vc = Thread.current[vc_key]
-              Thread.current[vc_key] = vc
-              begin
-                original.bind(self).call
-              ensure
-                Thread.current[vc_key] = old_vc
-              end
-            else
-              original.bind(self).call
-            end
+                    vc_key = assoc_class.privacy_vc_key
+                    old_vc = Thread.current[vc_key]
+                    Thread.current[vc_key] = vc
+                    begin
+                      original.bind(self).call
+                    ensure
+                      Thread.current[vc_key] = old_vc
+                    end
+                  else
+                    original.bind(self).call
+                  end
 
             return nil unless obj
             return obj unless vc
@@ -485,17 +486,17 @@ module Sequel
 
             # Load association with VC context set if available
             objs = if vc && assoc_class.respond_to?(:privacy_vc_key)
-              vc_key = assoc_class.privacy_vc_key
-              old_vc = Thread.current[vc_key]
-              Thread.current[vc_key] = vc
-              begin
-                original.bind(self).call
-              ensure
-                Thread.current[vc_key] = old_vc
-              end
-            else
-              original.bind(self).call
-            end
+                     vc_key = assoc_class.privacy_vc_key
+                     old_vc = Thread.current[vc_key]
+                     Thread.current[vc_key] = vc
+                     begin
+                       original.bind(self).call
+                     ensure
+                       Thread.current[vc_key] = old_vc
+                     end
+                   else
+                     original.bind(self).call
+                   end
 
             return objs unless vc
 
@@ -526,12 +527,12 @@ module Sequel
 
             unless vc
               Kernel.raise Sequel::Privacy::MissingViewerContext,
-                "Cannot #{method_name} without a viewer context"
+                           "Cannot #{method_name} without a viewer context"
             end
 
             if vc.is_a?(Sequel::Privacy::OmniscientVC)
               Kernel.raise Sequel::Privacy::Unauthorized,
-                "Cannot #{method_name} with OmniscientVC"
+                           "Cannot #{method_name} with OmniscientVC"
             end
 
             # Check policy with 3-arity: (subject=self, actor, direct_object=obj)
@@ -539,7 +540,7 @@ module Sequel
 
             unless allowed
               Kernel.raise Sequel::Privacy::Unauthorized,
-                "Cannot #{method_name} on #{self.class}"
+                           "Cannot #{method_name} on #{self.class}"
             end
 
             original.bind(self).call(obj)
@@ -556,12 +557,12 @@ module Sequel
 
             unless vc
               Kernel.raise Sequel::Privacy::MissingViewerContext,
-                "Cannot #{method_name} without a viewer context"
+                           "Cannot #{method_name} without a viewer context"
             end
 
             if vc.is_a?(Sequel::Privacy::OmniscientVC)
               Kernel.raise Sequel::Privacy::Unauthorized,
-                "Cannot #{method_name} with OmniscientVC"
+                           "Cannot #{method_name} with OmniscientVC"
             end
 
             # Check policy with 3-arity: (subject=self, actor, direct_object=obj)
@@ -569,7 +570,7 @@ module Sequel
 
             unless allowed
               Kernel.raise Sequel::Privacy::Unauthorized,
-                "Cannot #{method_name} on #{self.class}"
+                           "Cannot #{method_name} on #{self.class}"
             end
 
             original.bind(self).call(obj)
@@ -586,20 +587,20 @@ module Sequel
 
             unless vc
               Kernel.raise Sequel::Privacy::MissingViewerContext,
-                "Cannot #{method_name} without a viewer context"
+                           "Cannot #{method_name} without a viewer context"
             end
 
             if vc.is_a?(Sequel::Privacy::OmniscientVC)
               Kernel.raise Sequel::Privacy::Unauthorized,
-                "Cannot #{method_name} with OmniscientVC"
+                           "Cannot #{method_name} with OmniscientVC"
             end
 
             # Check policy with 2-arity: (subject=self, actor) - no direct object for remove_all
-            allowed = Sequel::Privacy::Enforcer.enforce(policies, self, vc, nil)
+            allowed = Sequel::Privacy::Enforcer.enforce(policies, self, vc)
 
             unless allowed
               Kernel.raise Sequel::Privacy::Unauthorized,
-                "Cannot #{method_name} on #{self.class}"
+                           "Cannot #{method_name} on #{self.class}"
             end
 
             original.bind(self).call
@@ -671,15 +672,13 @@ module Sequel
           vc = viewer_context
 
           if vc.is_a?(Sequel::Privacy::OmniscientVC)
-            Kernel.raise Sequel::Privacy::Unauthorized, "Cannot mutate with OmniscientVC"
+            Kernel.raise Sequel::Privacy::Unauthorized, 'Cannot mutate with OmniscientVC'
           end
 
           if vc
             action = new? ? :create : :edit
 
-            unless allow?(vc, action)
-              Kernel.raise Sequel::Privacy::Unauthorized, "Cannot #{action} #{self.class}"
-            end
+            Kernel.raise Sequel::Privacy::Unauthorized, "Cannot #{action} #{self.class}" unless allow?(vc, action)
 
             # Check field-level policies on changed fields
             changed_columns.each do |field|
@@ -701,9 +700,7 @@ module Sequel
         def update(hash)
           vc = viewer_context
           if vc
-            unless allow?(vc, :edit)
-              Kernel.raise Sequel::Privacy::Unauthorized, "Cannot edit #{self.class}"
-            end
+            Kernel.raise Sequel::Privacy::Unauthorized, "Cannot edit #{self.class}" unless allow?(vc, :edit)
 
             hash.each_key do |field|
               policy = T.unsafe(self.class).privacy_fields[field]
@@ -723,7 +720,7 @@ module Sequel
         sig { returns(T.self_type) }
         def delete
           if viewer_context.is_a?(Sequel::Privacy::OmniscientVC)
-            Kernel.raise Sequel::Privacy::Unauthorized, "Cannot delete with OmniscientVC"
+            Kernel.raise Sequel::Privacy::Unauthorized, 'Cannot delete with OmniscientVC'
           end
           super
         end
