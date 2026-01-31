@@ -83,8 +83,11 @@ This behavior may change.
 ### 3. Query with Privacy Enforcement
 
 ```ruby
-# Create a viewer context
-vc = Sequel::Privacy::ViewerContext.for_actor(current_user)
+# Create a viewer context; one viewer context for each request.
+# In a Roda app, you could do this at the top of your routing tree,
+# in Sinatra you could do this in a `before` filter. See the dedicated
+# section below for more information about VCs.
+current_vc = Sequel::Privacy::ViewerContext.for_actor(current_user)
 
 # Results will filter out records that your VC can't see.
 members = Member.for_vc(vc).where(org_id: current_user.org_id).all
@@ -94,11 +97,7 @@ members = Member.for_vc(vc).where(org_id: current_user.org_id).all
 my_groups = Group.for_vc(vc).all # DONT: This results on tons of records being returned, processed and filtered for no reason.
 my_groups = Group.for_vc(vc).where(creator: current_user).all # DO
 
-# Check permissions explicitly
-member.allow?(vc, :view)  # => true/false
-member.allow?(vc, :edit)  # => true/false
-
-# Protected fields return nil if denied
+# Field-level privacy policies will be enforced on access. 
 member.email  # => nil if :view_email denies
 member.phone  # => nil if :view_phone denies
 ```
@@ -198,13 +197,14 @@ Anonymous VCs are useful for logged out users, and can check that their access i
 that are meant to be fully public.
 
 Omniscient VCs are most useful when your application needs to see an object that a user cannot for some reason.
-Handle them with care. Login is the most salient example. 
+Handle them with care. Login is the most salient example (see note below for more detail). 
 
 All-Powerful VCs bypass all privacy checks and are used in situations where the system needs unfettered access
 to models. In a production setting, your application should prohibit raw Database access outside of the privacy-aware
 system, so these VCs give you an escape hatch for things like scripts while also keeping an audit trail. 
 
 `omniscient` and `all_powerful` require a reason (symbol) for audit logging.
+You could also create lint rules that prevent the casual creation of these viewer contexts.
 
 ```ruby
 # Standard viewer (most common)
@@ -225,6 +225,36 @@ current_vc = Sequel::Privacy::ViewerContext.for_actor(current_user)
 
 # All-powerful ViewerContexts dangerously bypass all read and write checks.
 admin_vc = Sequel::Privacy::ViewerContext.all_powerful(:admin_migration)
+```
+
+### A Note Login & Authenticated Users
+
+If your User or equivalent model is privacy-aware *and* is protected by 
+policies that would complicating fetching (or login), then you will have
+trouble creating a `current_user` for an `ActorVC`.
+
+In both cases you can use an `OmniscientVC` to make your initial User query.
+
+```ruby
+before do
+  if session[:user_id]
+    current_user = Sequel::Privacy::ViewerContext.omniscient(:session).then {|vc| User.for_vc(vc)[session[:user_id]] }
+    current_vc = Sequel::Privacy::ViewerContext.for_actor(current_user)
+  else
+    current_user = nil
+    current_vc = Sequel::Privacy::ViewerContext.anonymous
+  end
+end
+
+post '/auth/password' do
+  user = Sequel::Privacy::ViewerContext.omniscient(:login).then {|vc| User.for_vc(vc).first(email: params[:email]) }  
+  
+  pass unless user
+  pass unless user.password == params[:password]
+  
+  session[:user_id] = user.id
+  redirect '/'
+end
 ```
 
 ## Mutation Enforcement

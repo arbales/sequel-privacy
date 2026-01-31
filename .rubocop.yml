@@ -3,7 +3,8 @@ AllCops:
   NewCops: enable
   Exclude:
     - sorbet/**/*
-    - vendor/**/*    
+    - vendor/**/*
+    - fragments/**/*
 Metrics:
   Enabled: false
 Lint/UnderscorePrefixedVariableName:
