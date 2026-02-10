@@ -17,6 +17,7 @@ Style/RedundantSelf:
   Enabled: false
 Style/Lambda:
   Enabled: false
+  EnforcedStyle: literal
 Style/LambdaCall:
   EnforcedStyle: braces
 Style/AccessModifierDeclarations:
@@ -27,3 +28,5 @@ Naming/BlockForwarding:
   EnforcedStyle: explicit
 Style/ArgumentsForwarding:
   Enabled: false
+Layout/MultilineAssignmentLayout:
+  EnforcedStyle: same_line

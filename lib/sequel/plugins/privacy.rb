@@ -37,8 +37,8 @@ module Sequel
       extend T::Sig
 
       # Called once when plugin first loads on a model
-      sig { params(model: T.class_of(Sequel::Model), opts: T::Hash[Symbol, T.untyped]).void }
-      def self.apply(model, opts = {})
+      sig { params(model: T.class_of(Sequel::Model), _opts: T::Hash[Symbol, T.untyped]).void }
+      def self.apply(model, _opts = {})
         model.instance_variable_set(:@privacy_policies, {})
         model.instance_variable_set(:@privacy_fields, {})
         model.instance_variable_set(:@privacy_association_policies, {})
@@ -75,7 +75,7 @@ module Sequel
                          "Association action must be :add, :remove, or :remove_all, got #{action.inspect}"
           end
 
-          resolved = @policy_resolver.call(policies)
+          resolved = @policy_resolver.(policies)
           @pending_policies[action] ||= []
           T.must(@pending_policies[action]).concat(resolved)
         end
@@ -300,17 +300,15 @@ module Sequel
                            "#{self.class}##{field} requires a ViewerContext"
             end
 
-            value = original_method.bind(self).call
+            value = original_method.bind(self).()
 
             # InternalPolicyEvaluationVC = return raw value (for policy checks)
             return value if vc.is_a?(Sequel::Privacy::InternalPolicyEvaluationVC)
 
             # Check privacy policy
-            if T.unsafe(self).allow?(vc, policy_name)
-              value
-            else
-              nil
-            end
+            return unless T.unsafe(self).allow?(vc, policy_name)
+
+            value
           end
         end
 
@@ -445,12 +443,12 @@ module Sequel
                     old_vc = Thread.current[vc_key]
                     Thread.current[vc_key] = vc
                     begin
-                      original.bind(self).call
+                      original.bind(self).()
                     ensure
                       Thread.current[vc_key] = old_vc
                     end
                   else
-                    original.bind(self).call
+                    original.bind(self).()
                   end
 
             return nil unless obj
@@ -490,12 +488,12 @@ module Sequel
                      old_vc = Thread.current[vc_key]
                      Thread.current[vc_key] = vc
                      begin
-                       original.bind(self).call
+                       original.bind(self).()
                      ensure
                        Thread.current[vc_key] = old_vc
                      end
                    else
-                     original.bind(self).call
+                     original.bind(self).()
                    end
 
             return objs unless vc
@@ -517,8 +515,8 @@ module Sequel
           end
         end
 
-        sig { params(assoc_name: Symbol, singular_name: Symbol, policies: T::Array[T.untyped]).void }
-        def _wrap_association_add(assoc_name, singular_name, policies)
+        sig { params(_assoc_name: Symbol, singular_name: Symbol, policies: T::Array[T.untyped]).void }
+        def _wrap_association_add(_assoc_name, singular_name, policies)
           method_name = :"add_#{singular_name}"
           original = instance_method(method_name)
 
@@ -543,12 +541,12 @@ module Sequel
                            "Cannot #{method_name} on #{self.class}"
             end
 
-            original.bind(self).call(obj)
+            original.bind(self).(obj)
           end
         end
 
-        sig { params(assoc_name: Symbol, singular_name: Symbol, policies: T::Array[T.untyped]).void }
-        def _wrap_association_remove(assoc_name, singular_name, policies)
+        sig { params(_assoc_name: Symbol, singular_name: Symbol, policies: T::Array[T.untyped]).void }
+        def _wrap_association_remove(_assoc_name, singular_name, policies)
           method_name = :"remove_#{singular_name}"
           original = instance_method(method_name)
 
@@ -573,12 +571,12 @@ module Sequel
                            "Cannot #{method_name} on #{self.class}"
             end
 
-            original.bind(self).call(obj)
+            original.bind(self).(obj)
           end
         end
 
-        sig { params(assoc_name: Symbol, plural_name: Symbol, policies: T::Array[T.untyped]).void }
-        def _wrap_association_remove_all(assoc_name, plural_name, policies)
+        sig { params(_assoc_name: Symbol, plural_name: Symbol, policies: T::Array[T.untyped]).void }
+        def _wrap_association_remove_all(_assoc_name, plural_name, policies)
           method_name = :"remove_all_#{plural_name}"
           original = instance_method(method_name)
 
@@ -603,7 +601,7 @@ module Sequel
                            "Cannot #{method_name} on #{self.class}"
             end
 
-            original.bind(self).call
+            original.bind(self).()
           end
         end
       end
@@ -753,7 +751,7 @@ module Sequel
             old_vc = Thread.current[vc_key]
             Thread.current[vc_key] = vc
             begin
-              model_class.call(values)
+              model_class.(values)
             ensure
               Thread.current[vc_key] = old_vc
             end

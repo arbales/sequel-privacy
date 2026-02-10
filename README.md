@@ -58,6 +58,9 @@ end
 ```ruby
 class Member < Sequel::Model
   plugin :privacy
+  
+  # Include this module if this model can be used to create a viewer context.  
+  include Sequel::Privacy::IActor
 
   privacy do
     # Define who can view this model; be strategic about the order of your policies so that You
@@ -104,7 +107,9 @@ member.phone  # => nil if :view_phone denies
 
 ## Policy Definition
 
-Policies are lambdas that execute in the context of an `Actions` struct, giving access to `allow`, `deny`, and `pass` outcome methods, as well as the `all` combinator. Policies accept up to three parameters: `actor`, `subject` & `actor` or `subject`, `actor` and `direct_object`.
+Policies are lambdas that execute in the context of an `Actions` struct, giving access to `allow`, `deny`, and `pass` outcome methods, as well as the `all` combinator. `allow` and `deny` will end evaluation of the chain of policies, whereas `pass` will continue to the next policy in the chain. 
+
+Policies accept up to three parameters: `actor`, `subject` & `actor` or `subject`, `actor` and `direct_object`. 
 
 
 ```ruby
@@ -147,12 +152,6 @@ module P
   end
 end
 ```
-
-### Policy Return Values
-
-- `allow` - Permits the action, stops evaluation
-- `deny` - Rejects the action, stops evaluation
-- `pass` (or no explicit return) - Continues to the next policy in the chain
 
 ### Policy Options
 
@@ -309,7 +308,7 @@ The `association` block supports three actions:
 - `:remove` - Wraps `remove_*` method (e.g., `remove_member`)
 - `:remove_all` - Wraps `remove_all_*` method (e.g., `remove_all_members`)
 
-The `:add` and `:remove` policies use 3-arity, receiving `(subject, actor, direct_object)`:
+Association policies receive `(subject, actor, direct_object)`:
 - `subject` - The model instance (e.g., the group)
 - `actor` - The current user from the viewer context
 - `direct_object` - The object being added/removed (e.g., the user being added to the group)
@@ -318,17 +317,17 @@ For `remove_all`, the direct object is `nil` since there's no specific target.
 
 ```ruby
 # Allow users to add/remove themselves
-policy :AllowSelfJoin, ->(_group, actor, target_user) {
-  allow if actor.id == target_user.id
+policy :AllowSelfJoin, ->(_subject, actor, direct_object) {
+  allow if actor.id == direct_object.id
 }, single_match: true
 
-policy :AllowSelfRemove, ->(_group, actor, target_user) {
-  allow if actor.id == target_user.id
+policy :AllowSelfRemove, ->(_subject, actor, direct_object) {
+  allow if actor.id == direct_object.id
 }, single_match: true
 
 # Allow group admins to add/remove anyone
-policy :AllowGroupAdmin, ->(group, actor, _target_user) {
-  allow if GroupAdmin.where(group_id: group.id, user_id: actor.id).exists?
+policy :AllowGroupAdmin, ->(subject, actor, direct_object) {
+  allow if subject.includes_admin?(actor)
 }
 ```
 
@@ -350,11 +349,6 @@ group.remove_all_members
 group.add_member(other_user)  # Raises Sequel::Privacy::Unauthorized
 ```
 
-Association privacy methods:
-- Require a viewer context (raises `MissingViewerContext` if missing)
-- Deny operations with `OmniscientVC` (read-only context cannot mutate)
-- Work with both `one_to_many` and `many_to_many` associations
-
 ### Exception Types
 
 - `Sequel::Privacy::Unauthorized` - Action denied at the record level
@@ -363,19 +357,15 @@ Association privacy methods:
 
 ## Logging
 
-Configure a logger to see policy evaluation:
+Configure a logger to see policy evaluation. It will show the evaluation results
+(ALLOW, DENY, PASS) as well as cache hits/optimizations and note when privacy
+is bypassed by an APVC or an OmniVC. 
 
 ```ruby
 Sequel::Privacy.logger = Logger.new(STDOUT)
 # or with SemanticLogger
 Sequel::Privacy.logger = SemanticLogger['Privacy']
 ```
-
-Log output shows:
-- Policy evaluation results (ALLOW/DENY/PASS)
-- Cache hits
-- Single-match optimizations
-- All-powerful/omniscient context bypasses
 
 ## Cache Management
 
@@ -404,7 +394,8 @@ Sequel::Privacy.single_matches.clear
 
 ## Actor Interface
 
-Your user/member model must implement `Sequel::Privacy::IActor`:
+Your user/member model must include and implement `Sequel::Privacy::IActor`. 
+This will be runtime checked by Sorbet. 
 
 ```ruby
 class Member < Sequel::Model
@@ -422,6 +413,7 @@ Child classes inherit privacy policies from their parents:
 
 ```ruby
 class User < Sequel::Model
+  include Sequel::Privacy::IActor
   plugin :privacy
 
   privacy do
