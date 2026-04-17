@@ -123,7 +123,7 @@ module Sequel
         #     can :remove, AllowGroupAdmin, AllowSelfRemove
         #     can :remove_all, AllowGroupAdmin
         #   end
-        sig { params(name: Symbol, block: T.proc.void).void }
+        sig { params(name: Symbol, block: T.proc.bind(AssociationPrivacyDSL).void).void }
         def association(name, &block)
           resolver = ->(policies) { resolve_policies(policies) }
           dsl = AssociationPrivacyDSL.new(@model_class, name, resolver)
@@ -260,7 +260,7 @@ module Sequel
         #     can :edit, P::AllowSelf, P::AllowAdmins
         #     field :email, P::AllowSelf
         #   end
-        sig { params(block: T.proc.void).void }
+        sig { params(block: T.proc.bind(PrivacyDSL).void).void }
         def privacy(&block)
           if privacy_finalized?
             Kernel.raise Sequel::Privacy::PrivacyAlreadyFinalizedError, "Privacy already finalized for #{self}"
