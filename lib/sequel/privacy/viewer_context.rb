@@ -105,22 +105,6 @@ module Sequel
       end
     end
 
-    # Internal policy evaluation viewer context.
-    # Used internally during policy evaluation to allow raw association access
-    # without triggering recursive privacy checks. For example, when checking
-    # "is actor a member of this list?", we need to access list.members without
-    # filtering those members by their own :view policies.
-    #
-    # This class is internal to the privacy plugin and should not be used directly.
-    class InternalPolicyEvaluationVC < ViewerContext
-      extend T::Sig
-
-      sig { void }
-      def initialize
-        super()
-      end
-    end
-
     # Type alias for viewer contexts
     TViewerContext = T.type_alias { ViewerContext }
   end

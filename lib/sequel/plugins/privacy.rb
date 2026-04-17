@@ -57,7 +57,7 @@ module Sequel
         extend T::Sig
 
         sig {
-          params(model_class: T.untyped, assoc_name: Symbol,
+          params(model_class: ClassMethods, assoc_name: Symbol,
                  policy_resolver: T.proc.params(policies: T::Array[T.untyped]).returns(T::Array[T.untyped])).void
         }
         def initialize(model_class, assoc_name, policy_resolver)
@@ -84,10 +84,9 @@ module Sequel
         sig { void }
         def finalize_association!
           @pending_policies.each do |action, policies|
-            T.unsafe(@model_class).register_association_policies(@assoc_name, action, policies, defer_setup: true)
+            @model_class.register_association_policies(@assoc_name, action, policies, defer_setup: true)
           end
-          # Now set up the privacy wrappers after all policies are registered
-          T.unsafe(@model_class).setup_association_privacy(@assoc_name)
+          @model_class.setup_association_privacy(@assoc_name)
         end
       end
 
@@ -95,7 +94,7 @@ module Sequel
       class PrivacyDSL
         extend T::Sig
 
-        sig { params(model_class: T.untyped).void }
+        sig { params(model_class: ClassMethods).void }
         def initialize(model_class)
           @model_class = model_class
         end
@@ -104,7 +103,7 @@ module Sequel
         sig { params(action: Symbol, policies: T.untyped).void }
         def can(action, *policies)
           resolved = resolve_policies(policies)
-          T.unsafe(@model_class).register_policies(action, resolved)
+          @model_class.register_policies(action, resolved)
         end
 
         # Define a protected field with its policies
@@ -112,8 +111,8 @@ module Sequel
         def field(name, *policies)
           resolved = resolve_policies(policies)
           policy_name = :"view_#{name}"
-          T.unsafe(@model_class).register_policies(policy_name, resolved)
-          T.unsafe(@model_class).register_protected_field(name, policy_name)
+          @model_class.register_policies(policy_name, resolved)
+          @model_class.register_protected_field(name, policy_name)
         end
 
         # Define policies for an association
@@ -135,7 +134,7 @@ module Sequel
         # Finalize privacy settings (no more changes allowed)
         sig { void }
         def finalize!
-          T.unsafe(@model_class).finalize_privacy!
+          @model_class.finalize_privacy!
         end
 
         private
@@ -212,10 +211,14 @@ module Sequel
           if vc && instance
             instance.instance_variable_set(:@viewer_context, vc)
 
-            # Check :view policy (skip for InternalPolicyEvaluationVC - used during policy evaluation)
-            if !vc.is_a?(Sequel::Privacy::InternalPolicyEvaluationVC) && !instance.allow?(vc, :view)
+            # During nested policy evaluation, return raw rows so the outer
+            # policy can traverse data (e.g. checking membership) without
+            # recursive :view filtering.
+            return instance if Sequel::Privacy::Enforcer.in_policy_eval?
+
+            unless T.cast(instance, InstanceMethods).allow?(vc, :view)
               Sequel::Privacy.logger&.debug { "Privacy denied :view on #{self}[#{instance.pk}]" }
-              return nil # Filtered out
+              return nil
             end
           end
 
@@ -292,21 +295,19 @@ module Sequel
 
           # Override the field getter
           define_method(field) do
+            # During nested policy evaluation, return raw value without
+            # checking the field's view policy.
+            return original_method.bind(self).() if Sequel::Privacy::Enforcer.in_policy_eval?
+
             vc = instance_variable_get(:@viewer_context)
 
-            # Require VC for protected field access
             unless vc
               Kernel.raise Sequel::Privacy::MissingViewerContext,
                            "#{self.class}##{field} requires a ViewerContext"
             end
 
             value = original_method.bind(self).()
-
-            # InternalPolicyEvaluationVC = return raw value (for policy checks)
-            return value if vc.is_a?(Sequel::Privacy::InternalPolicyEvaluationVC)
-
-            # Check privacy policy
-            return unless T.unsafe(self).allow?(vc, policy_name)
+            return unless T.cast(self, InstanceMethods).allow?(vc, policy_name)
 
             value
           end
@@ -453,16 +454,12 @@ module Sequel
 
             return nil unless obj
             return obj unless vc
+            return obj if Sequel::Privacy::Enforcer.in_policy_eval?
 
-            # InternalPolicyEvaluationVC = return raw data (for policy checks)
-            # This allows policies to access associations without filtering
-            return obj if vc.is_a?(Sequel::Privacy::InternalPolicyEvaluationVC)
+            privacy_aware = obj.is_a?(Sequel::Model) && obj.class.respond_to?(:privacy_vc_key)
+            obj.instance_variable_set(:@viewer_context, vc) if privacy_aware
 
-            # Attach viewer context to associated object
-            obj.instance_variable_set(:@viewer_context, vc) if obj.respond_to?(:allow?)
-
-            # Check :view policy on associated object
-            if obj.respond_to?(:allow?) && !obj.allow?(vc, :view)
+            if privacy_aware && !T.cast(obj, InstanceMethods).allow?(vc, :view)
               nil
             else
               obj
@@ -497,16 +494,13 @@ module Sequel
                    end
 
             return objs unless vc
+            return objs if Sequel::Privacy::Enforcer.in_policy_eval?
 
-            # InternalPolicyEvaluationVC = return raw data (for policy checks like includes_member?)
-            # This allows policies to access associations without filtering
-            return objs if vc.is_a?(Sequel::Privacy::InternalPolicyEvaluationVC)
-
-            # Filter array, attaching VC and checking :view policy
             objs.filter_map do |obj|
-              obj.instance_variable_set(:@viewer_context, vc) if obj.respond_to?(:allow?)
+              privacy_aware = obj.is_a?(Sequel::Model) && obj.class.respond_to?(:privacy_vc_key)
+              obj.instance_variable_set(:@viewer_context, vc) if privacy_aware
 
-              if obj.respond_to?(:allow?) && !obj.allow?(vc, :view)
+              if privacy_aware && !T.cast(obj, InstanceMethods).allow?(vc, :view)
                 nil
               else
                 obj
@@ -644,24 +638,13 @@ module Sequel
           ).returns(T::Boolean)
         end
         def allow?(vc, action, direct_object = nil)
-          policies = T.unsafe(self.class).privacy_policies[action]
+          policies = _privacy_class.privacy_policies[action]
           unless policies
             Sequel::Privacy.logger&.error("No policies defined for :#{action} on #{self.class}")
             return false
           end
 
-          # Use InternalPolicyEvaluationVC during policy evaluation.
-          # This signals to association wrappers that they should return raw data
-          # without filtering, allowing policies to check things like "is actor a
-          # member of this list?" by accessing list.members without recursively
-          # checking each member's :view policy.
-          saved_vc = viewer_context
-          self.viewer_context = Sequel::Privacy::InternalPolicyEvaluationVC.new
-          begin
-            Sequel::Privacy::Enforcer.enforce(policies, self, vc, direct_object)
-          ensure
-            self.viewer_context = saved_vc
-          end
+          Sequel::Privacy::Enforcer.enforce(policies, self, vc, direct_object)
         end
 
         # Override save to check privacy policies
@@ -678,9 +661,8 @@ module Sequel
 
             Kernel.raise Sequel::Privacy::Unauthorized, "Cannot #{action} #{self.class}" unless allow?(vc, action)
 
-            # Check field-level policies on changed fields
             changed_columns.each do |field|
-              policy = T.unsafe(self.class).privacy_fields[field]
+              policy = _privacy_class.privacy_fields[field]
               next unless policy
 
               unless allow?(vc, policy)
@@ -701,7 +683,7 @@ module Sequel
             Kernel.raise Sequel::Privacy::Unauthorized, "Cannot edit #{self.class}" unless allow?(vc, :edit)
 
             hash.each_key do |field|
-              policy = T.unsafe(self.class).privacy_fields[field]
+              policy = _privacy_class.privacy_fields[field]
               next unless policy
 
               unless allow?(vc, policy)
@@ -712,6 +694,16 @@ module Sequel
           end
 
           super
+        end
+
+        private
+
+        # Typed view of the model class for accessing methods mixed in by the
+        # privacy plugin. The cast is sound because every class that includes
+        # InstanceMethods also extends ClassMethods (via mixes_in_class_methods).
+        sig { returns(ClassMethods) }
+        def _privacy_class
+          T.cast(self.class, ClassMethods)
         end
 
         # Override delete to block OmniscientVC
@@ -745,7 +737,7 @@ module Sequel
           vc = opts[:viewer_context]
           return super unless vc
 
-          model_class = T.unsafe(model)
+          model_class = T.cast(model, ClassMethods)
           vc_key = model_class.privacy_vc_key
           proc do |values|
             old_vc = Thread.current[vc_key]

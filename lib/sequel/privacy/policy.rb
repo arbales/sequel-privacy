@@ -21,11 +21,12 @@ module Sequel
       sig { returns(T.nilable(String)) }
       attr_reader :comment
 
-      # Factory method for creating policies
+      # Factory method for creating policies. Accepts procs of any arity
+      # (0–3 args) returning :allow, :deny, :pass, or an Array of policies.
       sig do
         params(
           policy_name: Symbol,
-          lam: T.proc.returns(Symbol),
+          lam: Proc,
           comment: T.nilable(String),
           cacheable: T::Boolean,
           single_match: T::Boolean

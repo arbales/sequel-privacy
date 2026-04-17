@@ -1,4 +1,4 @@
-# typed: false
+# typed: true
 # frozen_string_literal: true
 
 module Sequel
@@ -17,6 +17,13 @@ module Sequel
     #     }, 'Allow admin users', cacheable: true
     #   end
     module PolicyDSL
+      extend T::Sig
+      extend T::Helpers
+
+      # PolicyDSL is meant to be `extend`ed onto another Module, so `self`
+      # at runtime is always a Module that responds to `const_set`.
+      requires_ancestor { Module }
+
       # Define a new policy constant on the extending module.
       #
       # @param name [Symbol] The policy name (will become a constant)
@@ -24,6 +31,15 @@ module Sequel
       # @param comment [String, nil] Human-readable description
       # @param cacheable [Boolean] Whether results can be cached (default: true)
       # @param single_match [Boolean] Whether only one subject/actor can match (default: false)
+      sig do
+        params(
+          name: Symbol,
+          lam: Proc,
+          comment: T.nilable(String),
+          cacheable: T::Boolean,
+          single_match: T::Boolean
+        ).void
+      end
       def policy(name, lam, comment = nil, cacheable: true, single_match: false)
         p = Policy.new(&lam).setup(
           policy_name: name,

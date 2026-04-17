@@ -22,4 +22,16 @@ curl -X PATCH -H "Content-Type: application/json" \
 
 # Anonymous user can only see published posts
 curl "localhost:9292/posts"
+
+# Carol joins the Book Club herself (AllowSelfJoin)
+curl -X POST -d "user_id=3" "localhost:9292/groups/1/members?session_user_id=3"
+
+# Carol can't add Alice (not group admin, not self)
+curl -X POST -d "user_id=1" "localhost:9292/groups/1/members?session_user_id=3"
+
+# Alice (admin) can add anyone
+curl -X POST -d "user_id=1" "localhost:9292/groups/1/members?session_user_id=1"
+
+# View the group with its members
+curl "localhost:9292/groups/1?session_user_id=2"
 ```

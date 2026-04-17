@@ -8,6 +8,13 @@ module Sequel
     module Enforcer
       extend T::Sig
 
+      # Thread-local flag set while a policy chain is being evaluated.
+      # Implicit :view enforcement (Model.call, field readers, association
+      # readers) checks this flag and returns raw data when set, so policies
+      # can traverse protected fields and associations without recursive
+      # filtering. Explicit `allow?` calls always run regardless.
+      EVAL_KEY = :sequel_privacy_in_policy_eval
+
       class << self
         extend T::Sig
 
@@ -16,6 +23,11 @@ module Sequel
         def logger
           Sequel::Privacy.logger
         end
+      end
+
+      sig { returns(T::Boolean) }
+      def self.in_policy_eval?
+        Thread.current[EVAL_KEY] == true
       end
 
       # Main entry point for policy evaluation.
@@ -34,39 +46,44 @@ module Sequel
         ).returns(T::Boolean)
       end
       def self.enforce(policies, subject, viewer_context, direct_object = nil)
-        # All-powerful and omniscient contexts bypass all checks
-        if viewer_context.is_a?(AllPowerfulVC)
-          logger&.warn('BYPASS: All-powerful viewer context bypasses all privacy rules.')
-          return true
+        saved = Thread.current[EVAL_KEY]
+        Thread.current[EVAL_KEY] = true
+
+        begin
+          # All-powerful and omniscient contexts bypass all checks
+          if viewer_context.is_a?(AllPowerfulVC)
+            logger&.warn('BYPASS: All-powerful viewer context bypasses all privacy rules.')
+            return true
+          end
+
+          if viewer_context.is_a?(OmniscientVC)
+            logger&.debug { "BYPASS: Omniscient viewer context (#{viewer_context.reason})" }
+            return true
+          end
+
+          actor = viewer_context.is_a?(ActorVC) ? viewer_context.actor : nil
+
+          if policies.empty?
+            logger&.error { "No policies for #{subject.class}[#{subject_id(subject)}]. Denying by default." }
+            policies = [BuiltInPolicies::AlwaysDeny]
+          end
+
+          # Ensure policy chain ends with AlwaysDeny (fail-secure)
+          unless policies.last == BuiltInPolicies::AlwaysDeny
+            logger&.warn { 'Policy chain should end with AlwaysDeny. Appending it.' }
+            policies = policies.dup << BuiltInPolicies::AlwaysDeny
+          end
+
+          policies.each do |uncasted_policy|
+            result = policy_result(uncasted_policy, subject, actor, viewer_context, direct_object)
+            return true if result == :allow
+            return false if result == :deny
+          end
+
+          false
+        ensure
+          Thread.current[EVAL_KEY] = saved
         end
-
-        if viewer_context.is_a?(OmniscientVC)
-          logger&.debug { "BYPASS: Omniscient viewer context (#{viewer_context.reason})" }
-          return true
-        end
-
-        actor = viewer_context.is_a?(ActorVC) ? viewer_context.actor : nil
-
-        # Ensure we have policies to evaluate
-        if policies.empty?
-          logger&.error { "No policies for #{subject.class}[#{subject_id(subject)}]. Denying by default." }
-          policies = [BuiltInPolicies::AlwaysDeny]
-        end
-
-        # Ensure policy chain ends with AlwaysDeny (fail-secure)
-        unless policies.last == BuiltInPolicies::AlwaysDeny
-          logger&.warn { 'Policy chain should end with AlwaysDeny. Appending it.' }
-          policies = policies.dup << BuiltInPolicies::AlwaysDeny
-        end
-
-        # Evaluate policies in order
-        policies.each do |uncasted_policy|
-          result = policy_result(uncasted_policy, subject, actor, viewer_context, direct_object)
-          return true if result == :allow
-          return false if result == :deny
-        end
-
-        false
       end
 
       # Compute cache key based on policy arity
@@ -201,13 +218,13 @@ module Sequel
 
         case policy.arity
         when 0
-          Actions.instance_exec(&policy)
+          Actions.evaluate(&policy)
         when 1
-          Actions.instance_exec(subject, &policy)
+          Actions.evaluate(subject, &policy)
         when 2
-          Actions.instance_exec(subject, T.must(actor), &policy)
+          Actions.evaluate(subject, T.must(actor), &policy)
         else
-          Actions.instance_exec(subject, T.must(actor), direct_object, &policy)
+          Actions.evaluate(subject, T.must(actor), direct_object, &policy)
         end
       end
 

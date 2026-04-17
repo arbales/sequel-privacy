@@ -771,6 +771,29 @@ RSpec.describe Sequel::Plugins::Privacy do
         expect { parent.allow?(vc, :view) }.to raise_error('Policy error')
         expect(parent.viewer_context).to eq(vc)
       end
+
+      it 'does not bypass nested non-view checks during policy evaluation' do
+        nested_edit_gate = Sequel::Privacy::Policy.create(
+          :nested_edit_gate,
+          ->(subject, actor) {
+            nested_vc = Sequel::Privacy::ViewerContext.for_actor(actor)
+            allow if subject.allow?(nested_vc, :edit)
+          }
+        )
+        deny = Sequel::Privacy::BuiltInPolicies::AlwaysDeny
+
+        test_class = Class.new(Sequel::Model(:privacy_parents)) do
+          plugin :privacy
+        end
+        test_class.policies :view, nested_edit_gate, deny
+        test_class.policies :edit, deny
+
+        parent = test_class.create(name: 'Task List', owner_id: 1)
+        parent.for_vc(vc)
+
+        # If nested non-view checks were bypassed, this would incorrectly allow.
+        expect(parent.allow?(vc, :view)).to be false
+      end
     end
 
     describe 'association privacy DSL' do

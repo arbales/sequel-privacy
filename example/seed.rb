@@ -3,6 +3,8 @@
 
 require_relative 'models'
 
+GroupMembership.dataset.delete
+Group.dataset.delete
 Post.dataset.delete
 User.dataset.delete
 
@@ -13,4 +15,8 @@ carol = User.create(name: 'Carol', email: 'carol@example.com', role: 'member')
 Post.create(title: 'Published Post', published: true, author_id: bob.id)
 Post.create(title: 'Draft Post', published: false, author_id: bob.id)
 
+book_club = Group.create(name: 'Book Club')
+DB[:group_memberships].insert(group_id: book_club.id, user_id: bob.id)
+
 puts "Users: Alice (admin, id=#{alice.id}), Bob (member, id=#{bob.id}), Carol (member, id=#{carol.id})"
+puts "Group: #{book_club.name} (id=#{book_club.id}) — members: Bob"

@@ -11,7 +11,7 @@ module P
   # factors, or could be useful for something like a truly public 
   # object.
   policy :AllowAnyone, -> { allow }
-  policy :AllowOnSundays, -> { allow if DateTime.now }
+  policy :AllowOnSundays, -> { allow if DateTime.now.sunday? }
 
   # Policies that receive only the subject can hinge on the state of it.
   # For example, published posts could be viewed by anyone.

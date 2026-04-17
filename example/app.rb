@@ -9,6 +9,7 @@ class App < Roda
   plugin :json_parser
   plugin :all_verbs
   plugin :error_handler
+  plugin :pass
 
   # In a production setting, you would probably not provide this level of detail,
   # just shown here for illustrative purposes.
@@ -65,7 +66,7 @@ class App < Roda
         end
 
         r.patch do
-          user.update(r.params)
+          user.update(r.params.slice('name', 'email'))
           {
             id: user.id,
             name: user.name
@@ -117,6 +118,50 @@ class App < Roda
             id: post.id,
             title: post.title
           }
+        end
+      end
+    end
+
+    r.on 'groups' do
+      r.is do
+        r.get do
+          Group.for_vc(@current_vc).all.collect { |g| { id: g.id, name: g.name } }
+        end
+      end
+
+      r.on Integer do |id|
+        group = Group.for_vc(@current_vc)[id] or r.pass
+
+        r.is do
+          r.get do
+            {
+              id: group.id,
+              name: group.name,
+              members: group.members.map { |m| { id: m.id, name: m.name } }
+            }
+          end
+        end
+
+        # Demonstrates association-level privacy: add_member / remove_member
+        # are wrapped by the privacy plugin and enforce the policies declared
+        # in the Group model's `association :members` block.
+        r.on 'members' do
+          r.is do
+            r.post do
+              target = User.for_vc(@current_vc)[r.params['user_id'].to_i] or r.pass
+              group.add_member(target)
+              response.status = 201
+              { added: target.id }
+            end
+          end
+
+          r.on Integer do |user_id|
+            r.delete do
+              target = User.for_vc(@current_vc)[user_id] or r.pass
+              group.remove_member(target)
+              { removed: user_id }
+            end
+          end
         end
       end
     end
