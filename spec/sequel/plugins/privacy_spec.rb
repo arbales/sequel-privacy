@@ -329,6 +329,24 @@ RSpec.describe Sequel::Plugins::Privacy do
       it 'raises MissingViewerContext when no viewer context attached' do
         expect { instance.secret_field }.to raise_error(Sequel::Privacy::MissingViewerContext)
       end
+
+      it 'returns raw field value without VC when class uses allow_unsafe_access!' do
+        allow_owner = allow_owner_policy
+        deny = deny_policy
+
+        unsafe_field_class = Class.new(Sequel::Model(:privacy_test_items)) do
+          plugin :privacy
+          allow_unsafe_access!
+
+          policies :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow, deny
+          policies :view_secret_field, allow_owner, deny
+
+          protect_field :secret_field
+        end
+
+        unsafe_instance = unsafe_field_class.new(name: 'Test', secret_field: 'secret', owner_id: 1)
+        expect(unsafe_instance.secret_field).to eq('secret')
+      end
     end
 
     describe '#save with privacy checks' do
@@ -934,9 +952,35 @@ RSpec.describe Sequel::Plugins::Privacy do
           expect(group.members.map(&:id)).to include(user.id)
         end
 
-        it 'raises MissingViewerContext without VC' do
+        it 'allows add without VC when class uses allow_unsafe_access!' do
           user = user_class.create(name: 'Test User', role: 'member')
           group = group_class.create(name: 'Test Group')
+
+          expect { group.add_member(user) }.not_to raise_error
+          expect(group.members.map(&:id)).to include(user.id)
+        end
+
+        it 'raises MissingViewerContext without VC when class does not allow unsafe access' do
+          user_klass = user_class
+          strict_group_class = Class.new(Sequel::Model(:privacy_groups)) do
+            plugin :privacy
+            many_to_many :members, class: user_klass,
+              join_table: :privacy_group_members,
+              left_key: :group_id,
+              right_key: :user_id
+
+            privacy do
+              can :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+              association :members do
+                can :add, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+              end
+            end
+          end
+
+          user = user_class.create(name: 'Test User', role: 'member')
+          group_id = DB[:privacy_groups].insert(name: 'Strict Group')
+          group = strict_group_class.for_vc(all_powerful_vc)[group_id]
+          group.instance_variable_set(:@viewer_context, nil)
 
           expect { group.add_member(user) }.to raise_error(Sequel::Privacy::MissingViewerContext)
         end
@@ -992,6 +1036,15 @@ RSpec.describe Sequel::Plugins::Privacy do
           expect { group.remove_member(user) }.not_to raise_error
           expect(group.members.map(&:id)).not_to include(user.id)
         end
+
+        it 'allows remove without VC when class uses allow_unsafe_access!' do
+          user = user_class.create(name: 'User', role: 'member')
+          group = group_class.create(name: 'Test Group')
+          DB[:privacy_group_members].insert(group_id: group.id, user_id: user.id)
+
+          expect { group.remove_member(user) }.not_to raise_error
+          expect(group.members.map(&:id)).not_to include(user.id)
+        end
       end
 
       describe 'remove_all_* method' do
@@ -1021,6 +1074,15 @@ RSpec.describe Sequel::Plugins::Privacy do
           group.for_vc(user_vc)
 
           expect { group.remove_all_members }.to raise_error(Sequel::Privacy::Unauthorized)
+        end
+
+        it 'allows remove_all without VC when class uses allow_unsafe_access!' do
+          user = user_class.create(name: 'User', role: 'member')
+          group = group_class.create(name: 'Test Group')
+          DB[:privacy_group_members].insert(group_id: group.id, user_id: user.id)
+
+          expect { group.remove_all_members }.not_to raise_error
+          expect(group.members).to be_empty
         end
       end
     end

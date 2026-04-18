@@ -302,6 +302,8 @@ module Sequel
             vc = instance_variable_get(:@viewer_context)
 
             unless vc
+              return original_method.bind(self).() if T.unsafe(self.class).allow_unsafe_access?
+
               Kernel.raise Sequel::Privacy::MissingViewerContext,
                            "#{self.class}##{field} requires a ViewerContext"
             end
@@ -518,6 +520,8 @@ module Sequel
             vc = instance_variable_get(:@viewer_context)
 
             unless vc
+              return original.bind(self).(obj) if T.unsafe(self.class).allow_unsafe_access?
+
               Kernel.raise Sequel::Privacy::MissingViewerContext,
                            "Cannot #{method_name} without a viewer context"
             end
@@ -548,6 +552,8 @@ module Sequel
             vc = instance_variable_get(:@viewer_context)
 
             unless vc
+              return original.bind(self).(obj) if T.unsafe(self.class).allow_unsafe_access?
+
               Kernel.raise Sequel::Privacy::MissingViewerContext,
                            "Cannot #{method_name} without a viewer context"
             end
@@ -578,6 +584,8 @@ module Sequel
             vc = instance_variable_get(:@viewer_context)
 
             unless vc
+              return original.bind(self).() if T.unsafe(self.class).allow_unsafe_access?
+
               Kernel.raise Sequel::Privacy::MissingViewerContext,
                            "Cannot #{method_name} without a viewer context"
             end
