@@ -31,23 +31,26 @@ module P
   AlwaysAllow = Sequel::Privacy::BuiltInPolicies::AlwaysAllow
   PassAndLog = Sequel::Privacy::BuiltInPolicies::PassAndLog
 
-  policy :AllowIfPublished, ->(subject) {
+  # State-gate policies examine only the subject. Declare
+  # `allow_anonymous: true` so logged-out viewers can still pass.
+  policy :AllowIfPublished, ->(_actor, subject) {
     allow if subject.published
-  }
+  }, allow_anonymous: true, cache_by: :subject
 
-  policy :AllowAdmins, ->(_subject, actor) {
+  # Actor-only role checks — cheap because they cache per-actor.
+  policy :AllowAdmins, ->(actor) {
     allow if actor.is_role?(:admin)
   }, 'Allow admin users', cacheable: true
-  
-  policy :AllowMembers, ->(_subject, actor) {
+
+  policy :AllowMembers, ->(actor) {
     allow if actor.is_role?(:member)
   }, cacheable: true
 
-  policy :AllowSelf, ->(subject, actor) {
+  policy :AllowSelf, ->(actor, subject) {
     allow if subject == actor
-  }, 'Allow if subject is the actor', single_match: true  
-  
-  policy :AllowFriendsOfSubject, ->(subject, actor) {
+  }, 'Allow if subject is the actor', single_match: true
+
+  policy :AllowFriendsOfSubject, ->(actor, subject) {
     allow if subject.includes_friend?(actor)
   }
 end
@@ -107,28 +110,34 @@ member.phone  # => nil if :view_phone denies
 
 ## Policy Definition
 
-Policies are lambdas that execute in the context of an `Actions` struct, giving access to `allow`, `deny`, and `pass` outcome methods, as well as the `all` combinator. `allow` and `deny` will end evaluation of the chain of policies, whereas `pass` will continue to the next policy in the chain. 
+Policies are lambdas that execute in the context of an `Actions` struct, giving access to `allow`, `deny`, and `pass` outcome methods, as well as the `all` combinator. `allow` and `deny` will end evaluation of the chain of policies, whereas `pass` will continue to the next policy in the chain.
 
-Policies accept up to three parameters: `actor`, `subject` & `actor` or `subject`, `actor` and `direct_object`. 
+Policies are **actor-first**. Arities map to:
+- 0 args — global decision (`-> { allow if Time.now.sunday? }`)
+- 1 arg  — `(actor)`: role / identity checks
+- 2 args — `(actor, subject)`: ownership, membership
+- 3 args — `(actor, subject, direct_object)`: "can actor do X to subject with direct_object?"
+
+Policies of arity ≥ 1 auto-deny for anonymous viewers (nil actor). Use `allow_anonymous: true` to opt out — meant for state-gate policies that examine only the subject.
 
 
 ```ruby
 
 policy :AlwaysAllow, -> { allow }
 
-policy :AllowIfPublished, ->(subject) {
+policy :AllowIfPublished, ->(_actor, subject) {
   allow if subject.published
-}
+}, allow_anonymous: true, cache_by: :subject
 
-policy :AllowAdmins, ->(_subject, actor) {
+policy :AllowAdmins, ->(actor) {
   allow if actor.is_role?(:admin)
 }
 
-policy :AllowOwner, ->(_subject, actor) {
+policy :AllowOwner, ->(actor, subject) {
   allow if subject.owner_id == actor.id
 }
 
-policy :AllowIfDirectObjectIsActor, ->(_subject, actor, direct_object) {
+policy :AllowIfDirectObjectIsActor, ->(actor, _subject, direct_object) {
   allow if actor.id == direct_object.id
 }
 
@@ -141,14 +150,14 @@ different modules.
 module P
   module Groups
     extend Sequel::Privacy::PolicyDSL
-    
-    policy :AllowIfOpen, -> (subject, _actor) {
+
+    policy :AllowIfOpen, ->(_actor, subject) {
       allow if subject.open?
-    }
-    
-    policy :AllowIfMember, -> (subject, actor) {
+    }, allow_anonymous: true, cache_by: :subject
+
+    policy :AllowIfMember, ->(actor, subject) {
       allow if subject.includes_member? actor
-    }      
+    }
   end
 end
 ```
@@ -159,25 +168,31 @@ end
 policy :MyPolicy, ->() { ... },
   'Human-readable description',  # For logging
   cacheable: true,               # Cache results (default: true)
-  single_match: false            # Only one subject can match
+  single_match: false,           # Only one subject can match
+  cache_by: :actor,              # Override cache-key dimensions
+  allow_anonymous: false         # Allow nil actor (opts out of auto-deny)
 ```
 
 **`cacheable: true`** (default): Results are cached for the duration of the request, keyed by policy + arguments. Use for policies that don't depend on mutable state.
 
-**`single_match: true`**: Optimization for policies for which there is only one matching Actor possible for a given Subject. For example in `AllowAuthors`, since a `Post` can have only one other, it's not worth a potentially expensive check on other combinations once you've found the winner. 
+**`single_match: true`**: Optimization for policies for which there is only one matching Actor possible for a given Subject. For example in `AllowAuthors`, since a `Post` can have only one other, it's not worth a potentially expensive check on other combinations once you've found the winner.
+
+**`cache_by:`** (Symbol or Array of `:actor`, `:subject`, `:direct_object`): Override the cache-key dimensions. By default the key uses every input the policy receives. Pass a subset when the policy ignores some of its inputs — e.g. `AllowAdmins` takes `(actor, subject)` but only examines actor, so `cache_by: :actor` shares one entry across subjects.
+
+**`allow_anonymous: true`**: Skip the auto-deny for nil actor. Use for state-gate policies that examine only the subject (e.g. "post is published").
 
 ### Policy Combinators
 
 Use `all()` to require multiple conditions:
 
 ```ruby
-policy :AllowAddSelfToOpenGroup, ->(subject, actor, direct_object) {
+policy :AllowAddSelfToOpenGroup, ->(actor, subject, direct_object) {
   all(
-    P::AllowIfGroupIsOpen    
+    P::AllowIfGroupIsOpen,
     P::AllowIfDirectObjectIsActor
   )
 }
-policy :AllowRemoveSelf, ->(subject, actor, direct_object) {
+policy :AllowRemoveSelf, ->(actor, subject, direct_object) {
   all(
     P::AllowIfIncludesMember,
     P::AllowIfDirectObjectIsActor
@@ -308,25 +323,25 @@ The `association` block supports three actions:
 - `:remove` - Wraps `remove_*` method (e.g., `remove_member`)
 - `:remove_all` - Wraps `remove_all_*` method (e.g., `remove_all_members`)
 
-Association policies receive `(subject, actor, direct_object)`:
-- `subject` - The model instance (e.g., the group)
+Association policies receive `(actor, subject, direct_object)`:
 - `actor` - The current user from the viewer context
+- `subject` - The model instance (e.g., the group)
 - `direct_object` - The object being added/removed (e.g., the user being added to the group)
 
 For `remove_all`, the direct object is `nil` since there's no specific target.
 
 ```ruby
 # Allow users to add/remove themselves
-policy :AllowSelfJoin, ->(_subject, actor, direct_object) {
+policy :AllowSelfJoin, ->(actor, _subject, direct_object) {
   allow if actor.id == direct_object.id
 }, single_match: true
 
-policy :AllowSelfRemove, ->(_subject, actor, direct_object) {
+policy :AllowSelfRemove, ->(actor, _subject, direct_object) {
   allow if actor.id == direct_object.id
 }, single_match: true
 
 # Allow group admins to add/remove anyone
-policy :AllowGroupAdmin, ->(subject, actor, direct_object) {
+policy :AllowGroupAdmin, ->(actor, subject, _direct_object) {
   allow if subject.includes_admin?(actor)
 }
 ```

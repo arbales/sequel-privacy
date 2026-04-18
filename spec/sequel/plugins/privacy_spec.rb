@@ -34,13 +34,13 @@ RSpec.describe Sequel::Plugins::Privacy do
 
   # Define policies for testing
   let(:allow_owner_policy) do
-    Sequel::Privacy::Policy.create(:allow_owner, ->(subject, actor) {
+    Sequel::Privacy::Policy.create(:allow_owner, ->(actor, subject) {
       allow if subject.owner_id == actor.id
     })
   end
 
   let(:allow_admin_policy) do
-    Sequel::Privacy::Policy.create(:allow_admin, ->(_subject, actor) {
+    Sequel::Privacy::Policy.create(:allow_admin, ->(actor) {
       allow if actor.is_role?(:admin)
     })
   end
@@ -144,7 +144,7 @@ RSpec.describe Sequel::Plugins::Privacy do
 
     describe '.privacy' do
       let(:allow_owner_p) do
-        Sequel::Privacy::Policy.create(:allow_owner, ->(subject, actor) {
+        Sequel::Privacy::Policy.create(:allow_owner, ->(actor, subject) {
           allow if subject.owner_id == actor.id
         })
       end
@@ -739,7 +739,7 @@ RSpec.describe Sequel::Plugins::Privacy do
         # Create a policy that checks if actor is in the children list
         actor_in_children_policy = Sequel::Privacy::Policy.create(
           :actor_in_children,
-          ->(subject, actor) {
+          ->(actor, subject) {
             # This accesses the children association during policy evaluation.
             # Without clearing the VC, this would filter children and potentially
             # cause the check to fail incorrectly.
@@ -793,7 +793,7 @@ RSpec.describe Sequel::Plugins::Privacy do
       it 'does not bypass nested non-view checks during policy evaluation' do
         nested_edit_gate = Sequel::Privacy::Policy.create(
           :nested_edit_gate,
-          ->(subject, actor) {
+          ->(actor, subject) {
             nested_vc = Sequel::Privacy::ViewerContext.for_actor(actor)
             allow if subject.allow?(nested_vc, :edit)
           }
@@ -847,27 +847,27 @@ RSpec.describe Sequel::Plugins::Privacy do
         DB[:privacy_users].delete
       end
 
-      # 3-arity policies for testing
+      # 3-arity policies for testing (actor, subject, direct_object)
       let(:allow_self_add) do
-        Sequel::Privacy::Policy.create(:allow_self_add, ->(_group, actor, target_user) {
+        Sequel::Privacy::Policy.create(:allow_self_add, ->(actor, _group, target_user) {
           allow if actor.id == target_user.id
         })
       end
 
       let(:allow_self_remove) do
-        Sequel::Privacy::Policy.create(:allow_self_remove, ->(_group, actor, target_user) {
+        Sequel::Privacy::Policy.create(:allow_self_remove, ->(actor, _group, target_user) {
           allow if actor.id == target_user.id
         })
       end
 
       let(:allow_admin_action) do
-        Sequel::Privacy::Policy.create(:allow_admin_action, ->(_group, actor, _target) {
+        Sequel::Privacy::Policy.create(:allow_admin_action, ->(actor, _group, _target) {
           allow if actor.is_role?(:admin)
         })
       end
 
       let(:allow_admin_remove_all) do
-        Sequel::Privacy::Policy.create(:allow_admin_remove_all, ->(_group, actor) {
+        Sequel::Privacy::Policy.create(:allow_admin_remove_all, ->(actor, _group) {
           allow if actor.is_role?(:admin)
         })
       end

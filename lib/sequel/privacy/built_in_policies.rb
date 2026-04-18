@@ -25,7 +25,7 @@ module Sequel
       # Pass and log - useful for debugging policy chains.
       PassAndLog = Policy.create(
         :PassAndLog,
-        ->(subject, actor) {
+        ->(actor, subject) {
           Sequel::Privacy::Enforcer.logger&.info("PassAndLog: #{subject.class} for actor #{actor.id}")
           :pass
         },

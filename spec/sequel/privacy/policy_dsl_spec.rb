@@ -52,7 +52,7 @@ RSpec.describe Sequel::Privacy::PolicyDSL do
     end
 
     it 'preserves the lambda body so the policy is invocable' do
-      host_module.policy(:AllowSelf, ->(subject, actor) { :allow if subject == actor })
+      host_module.policy(:AllowSelf, ->(actor, subject) { :allow if subject == actor })
 
       policy = host_module::AllowSelf
       expect(policy.arity).to eq(2)

@@ -97,15 +97,27 @@ module Sequel
         ).returns(Integer)
       end
       def self.compute_cache_key(policy, subject, actor, viewer_context, direct_object)
+        if (keys = policy.cache_by)
+          parts = T.let([policy, viewer_context], T::Array[T.untyped])
+          keys.each do |k|
+            parts << case k
+                     when :actor then actor
+                     when :subject then subject
+                     when :direct_object then direct_object
+                     end
+          end
+          return parts.hash
+        end
+
         case policy.arity
         when 0
           [policy, viewer_context].hash
         when 1
-          [policy, subject, viewer_context].hash
+          [policy, actor, viewer_context].hash
         when 2
-          [policy, subject, actor, viewer_context].hash
+          [policy, actor, subject, viewer_context].hash
         else
-          [policy, subject, actor, direct_object, viewer_context].hash
+          [policy, actor, subject, direct_object, viewer_context].hash
         end
       end
 
@@ -211,8 +223,11 @@ module Sequel
         ).returns(T.untyped)
       end
       def self.execute_policy(policy, subject, actor, direct_object)
-        # 2+ arity policies require actor - auto-deny for anonymous
-        if !actor && policy.arity >= 2
+        # Policies with arity >= 1 expect an actor as the first arg.
+        # Anonymous viewers (no actor) auto-deny unless the policy opts in
+        # with allow_anonymous: true (for state-gate policies that examine
+        # only the subject).
+        if !actor && policy.arity >= 1 && !policy.allow_anonymous?
           return :deny
         end
 
@@ -220,11 +235,11 @@ module Sequel
         when 0
           Actions.evaluate(&policy)
         when 1
-          Actions.evaluate(subject, &policy)
+          Actions.evaluate(actor, &policy)
         when 2
-          Actions.evaluate(subject, T.must(actor), &policy)
+          Actions.evaluate(actor, subject, &policy)
         else
-          Actions.evaluate(subject, T.must(actor), direct_object, &policy)
+          Actions.evaluate(actor, subject, direct_object, &policy)
         end
       end
 
