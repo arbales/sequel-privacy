@@ -191,12 +191,16 @@ module Sequel
           :"#{self}_privacy_vc"
         end
 
-        # Override Sequel's call method - this is the lowest-level instantiation point
-        # for ALL database-loaded records. Every path goes through here:
-        # - Model[id], Model.first, Model.all, associations, etc.
+        # Override Sequel's call method to act as a strict-mode gate.
+        # Every database-loaded record flows through here (Model[id],
+        # Model.first, Model.all, associations, ...). This checks that a
+        # VC is in scope (or that the class opted out via
+        # allow_unsafe_access!) and defers VC attachment and :view
+        # filtering to DatasetMethods#row_proc — those are per-row
+        # concerns and have context-dependent bypasses (policy
+        # evaluation, eager-load attachment) that don't belong here.
         sig { params(values: T.untyped).returns(T.nilable(Sequel::Model)) }
         def call(values)
-          # Check if we're in a VC context (thread-local set by for_vc)
           vc = Thread.current[privacy_vc_key]
 
           unless vc || allow_unsafe_access?
@@ -204,25 +208,7 @@ module Sequel
                          "#{self} requires a ViewerContext. Use #{self}.for_vc(vc) or call #{self}.allow_unsafe_access!"
           end
 
-          # Create the instance via parent chain
-          instance = super
-
-          # Attach VC if present
-          if vc && instance
-            instance.instance_variable_set(:@viewer_context, vc)
-
-            # During nested policy evaluation, return raw rows so the outer
-            # policy can traverse data (e.g. checking membership) without
-            # recursive :view filtering.
-            return instance if Sequel::Privacy::Enforcer.in_policy_eval?
-
-            unless T.cast(instance, InstanceMethods).allow?(vc, :view)
-              Sequel::Privacy.logger&.debug { "Privacy denied :view on #{self}[#{instance.pk}]" }
-              return nil
-            end
-          end
-
-          instance
+          super
         end
 
         # ─────────────────────────────────────────────────────────────────────
@@ -410,6 +396,8 @@ module Sequel
         # Override Sequel's associate method to wrap associations with privacy checks
         sig { params(type: Symbol, name: Symbol, opts: T.untyped, block: T.untyped).returns(T.untyped) }
         def associate(type, name, opts = {}, &block)
+          opts = _inject_privacy_eager_block(opts)
+
           # Call original to create the association
           result = super
 
@@ -424,6 +412,26 @@ module Sequel
           end
 
           result
+        end
+
+        # Wrap the association's eager-load dataset with for_vc() so the
+        # child rows are materialized with the current viewer context.
+        # The VC is propagated via a thread-local set by DatasetMethods#all
+        # so that it's only applied during eager loading, not during the
+        # lazy association reader path (which has its own handling).
+        sig { params(opts: T::Hash[Symbol, T.untyped]).returns(T::Hash[Symbol, T.untyped]) }
+        def _inject_privacy_eager_block(opts)
+          original = opts[:eager_block]
+          wrapped = proc do |ds|
+            ds = original.call(ds) if original
+            vc = Thread.current[DatasetMethods::EAGER_VC_KEY]
+            if vc && T.unsafe(ds).model.respond_to?(:privacy_vc_key)
+              T.unsafe(ds).for_vc(vc)
+            else
+              ds
+            end
+          end
+          opts.merge(eager_block: wrapped)
         end
 
         private
@@ -732,14 +740,27 @@ module Sequel
         has_attached_class!(:out)
         requires_ancestor { Sequel::Dataset }
 
+        # Thread-local key for propagating the current VC to eager-load
+        # datasets via the :eager_block injected in ClassMethods#associate.
+        EAGER_VC_KEY = :sequel_privacy_eager_vc
+
         # Attach viewer context to dataset for privacy enforcement on materialization
         sig { params(vc: Sequel::Privacy::ViewerContext).returns(Sequel::Dataset) }
         def for_vc(vc)
           clone(viewer_context: vc)
         end
 
-        # Override row_proc to wrap Model.call with thread-local VC.
-        # This is the single integration point that covers all iteration methods.
+        # Override row_proc to wrap Model.call with the full per-row
+        # privacy pipeline: set the thread-local VC so Model.call's
+        # strict-mode gate passes, attach the VC to the instance, and
+        # apply the :view filter — with two bypasses for materialization
+        # contexts where filtering would be wrong or break callers:
+        #   - in_policy_eval?: policies that traverse protected data
+        #     need raw rows so their checks (e.g. membership) aren't
+        #     short-circuited by recursive :view filtering.
+        #   - EAGER_VC_KEY: Sequel's eager-load attachment block
+        #     dereferences each record to bucket by FK and would crash
+        #     on nils; the association reader filters at read time.
         sig { returns(T.untyped) }
         def row_proc
           vc = opts[:viewer_context]
@@ -751,9 +772,22 @@ module Sequel
             old_vc = Thread.current[vc_key]
             Thread.current[vc_key] = vc
             begin
-              model_class.(values)
+              instance = model_class.(values)
             ensure
               Thread.current[vc_key] = old_vc
+            end
+
+            next nil if instance.nil?
+
+            instance.instance_variable_set(:@viewer_context, vc)
+            next instance if Sequel::Privacy::Enforcer.in_policy_eval?
+            next instance if Thread.current[EAGER_VC_KEY]
+
+            if T.cast(instance, InstanceMethods).allow?(vc, :view)
+              instance
+            else
+              Sequel::Privacy.logger&.debug { "Privacy denied :view on #{model_class}[#{instance.pk}]" }
+              nil
             end
           end
         end
@@ -763,6 +797,34 @@ module Sequel
         def all
           results = super
           opts[:viewer_context] ? results.compact : results
+        end
+
+        # Sequel calls post_load after rows are fetched but before any
+        # user block. Model's override of post_load triggers eager_load
+        # here. Set the thread-local VC around that call so each
+        # association's injected :eager_block can wrap its child dataset
+        # with for_vc. Children are then materialized with VC attached
+        # but without :view filtering (see Model.call), so Sequel's
+        # attachment block doesn't choke on nils; the accessor wrapper
+        # filters at read time.
+        #
+        # Parents filtered to nil by the :view policy must be dropped
+        # before eager_load runs — its attachment code dereferences each
+        # record, which nil would break.
+        sig { params(all_records: T.untyped).returns(T.untyped) }
+        def post_load(all_records)
+          vc = opts[:viewer_context]
+          return super unless vc && opts[:eager]
+
+          all_records.compact!
+
+          old = Thread.current[EAGER_VC_KEY]
+          Thread.current[EAGER_VC_KEY] = vc
+          begin
+            super
+          ensure
+            Thread.current[EAGER_VC_KEY] = old
+          end
         end
 
         # Create a new model instance with the viewer context attached

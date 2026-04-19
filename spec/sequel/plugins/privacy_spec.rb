@@ -652,6 +652,70 @@ RSpec.describe Sequel::Plugins::Privacy do
 
         expect(children.length).to eq(2)
       end
+
+      describe 'eager loading' do
+        it 'filters eager-loaded children by :view policy' do
+          parent = parent_class.create(name: 'Parent', owner_id: 1)
+          child_class.create(name: 'Owned Child', parent_id: parent.id, owner_id: 1)
+          child_class.create(name: 'Other Child', parent_id: parent.id, owner_id: 99)
+
+          loaded = parent_class.for_vc(vc).eager(:children).all.first
+          names = loaded.children.map(&:name)
+
+          expect(names).to contain_exactly('Owned Child')
+        end
+
+        it 'attaches the VC to each eager-loaded child' do
+          parent = parent_class.create(name: 'Parent', owner_id: 1)
+          child_class.create(name: 'Owned Child', parent_id: parent.id, owner_id: 1)
+
+          loaded = parent_class.for_vc(vc).eager(:children).all.first
+          expect(loaded.children.first.viewer_context).to eq(vc)
+        end
+
+        it 'does not raise MissingViewerContext for eager-loaded strict children' do
+          parent = parent_class.create(name: 'Parent', owner_id: 1)
+          child_class.create(name: 'Child', parent_id: parent.id, owner_id: 1)
+
+          expect {
+            parent_class.for_vc(vc).eager(:children).all
+          }.not_to raise_error
+        end
+
+        it 'returns all eager-loaded children for all-powerful VC' do
+          parent = parent_class.create(name: 'Parent', owner_id: 1)
+          child_class.create(name: 'Child 1', parent_id: parent.id, owner_id: 1)
+          child_class.create(name: 'Child 2', parent_id: parent.id, owner_id: 99)
+
+          loaded = parent_class.for_vc(all_powerful_vc).eager(:children).all.first
+          expect(loaded.children.length).to eq(2)
+        end
+
+        it 'filters children in strict mode (no allow_unsafe_access)' do
+          # parent_class and child_class in this describe block do NOT
+          # set allow_unsafe_access!, so this exercises the strict path
+          # end-to-end: eager load must propagate VC or Model.call raises.
+          parent = parent_class.create(name: 'P', owner_id: 1)
+          child_class.create(name: 'Mine', parent_id: parent.id, owner_id: 1)
+          child_class.create(name: 'Theirs', parent_id: parent.id, owner_id: 99)
+
+          loaded = parent_class.for_vc(vc).eager(:children).all.first
+
+          expect(loaded.children.map(&:name)).to contain_exactly('Mine')
+          expect(loaded.children.first.viewer_context).to eq(vc)
+        end
+
+        it 'leaves the parents query compaction intact (filters parents)' do
+          # A parent owned by actor 1 (visible) and one owned by 99 (hidden)
+          p1 = parent_class.create(name: 'Mine', owner_id: 1)
+          parent_class.create(name: 'Theirs', owner_id: 99)
+          child_class.create(name: 'Child', parent_id: p1.id, owner_id: 1)
+
+          loaded = parent_class.for_vc(vc).eager(:children).all
+
+          expect(loaded.map(&:name)).to contain_exactly('Mine')
+        end
+      end
     end
 
     describe 'one_to_one associations' do
@@ -729,6 +793,21 @@ RSpec.describe Sequel::Plugins::Privacy do
         address = parent.address
 
         expect(address).not_to be_nil
+      end
+
+      describe 'eager loading' do
+        it 'filters eager-loaded one_to_one association by :view policy' do
+          p1 = parent_class.create(name: 'P1', owner_id: 1)
+          p2 = parent_class.create(name: 'P2', owner_id: 1)
+          address_class.create(street: 'mine', parent_id: p1.id, owner_id: 1)
+          address_class.create(street: 'theirs', parent_id: p2.id, owner_id: 99)
+
+          loaded = parent_class.for_vc(vc).eager(:address).all
+          by_name = loaded.each_with_object({}) { |pa, h| h[pa.name] = pa.address }
+
+          expect(by_name['P1']&.street).to eq('mine')
+          expect(by_name['P2']).to be_nil
+        end
       end
     end
 

@@ -3,6 +3,6 @@
 
 module Sequel
   module Privacy
-    VERSION = '0.4'
+    VERSION = '0.5'
   end
 end
