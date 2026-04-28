@@ -405,8 +405,10 @@ module Sequel
           case type
           when :many_to_one, :one_to_one
             _override_singular_association(name)
+            _override_association_dataset(name)
           when :one_to_many, :many_to_many
             _override_plural_association(name)
+            _override_association_dataset(name)
             # Check if there are already privacy policies defined for this association
             setup_association_privacy(name) if privacy_association_policies[name]
           end
@@ -435,6 +437,29 @@ module Sequel
         end
 
         private
+
+        sig { params(name: Symbol).void }
+        def _override_association_dataset(name)
+          dataset_method = :"#{name}_dataset"
+          return unless method_defined?(dataset_method)
+
+          original = instance_method(dataset_method)
+          assoc_reflection = association_reflection(name)
+          assoc_class = T.let(nil, T.nilable(T.class_of(Sequel::Model)))
+
+          define_method(dataset_method) do |*args|
+            ds = original.bind(self).(*args)
+            vc = instance_variable_get(:@viewer_context)
+            return ds unless vc
+
+            assoc_class ||= assoc_reflection.associated_class
+            if assoc_class.respond_to?(:privacy_vc_key) && ds.respond_to?(:for_vc)
+              T.unsafe(ds).for_vc(vc)
+            else
+              ds
+            end
+          end
+        end
 
         sig { params(name: Symbol).void }
         def _override_singular_association(name)

@@ -642,6 +642,25 @@ RSpec.describe Sequel::Plugins::Privacy do
         expect(child.viewer_context).to eq(vc)
       end
 
+      it 'attaches VC to records loaded through the association dataset' do
+        parent = parent_class.create(name: 'Parent', owner_id: 1)
+        child_class.create(name: 'Owned Child', parent_id: parent.id, owner_id: 1)
+
+        parent.for_vc(vc)
+        child = parent.children_dataset.first
+
+        expect(child.viewer_context).to eq(vc)
+      end
+
+      it 'filters records loaded through the association dataset by :view policy' do
+        parent = parent_class.create(name: 'Parent', owner_id: 1)
+        child_class.create(name: 'Other Child', parent_id: parent.id, owner_id: 99)
+
+        parent.for_vc(vc)
+
+        expect(parent.children_dataset.first).to be_nil
+      end
+
       it 'returns all children for all-powerful VC' do
         parent = parent_class.create(name: 'Parent', owner_id: 1)
         child_class.create(name: 'Child 1', parent_id: parent.id, owner_id: 1)
@@ -994,6 +1013,18 @@ RSpec.describe Sequel::Plugins::Privacy do
             end
           end
         end
+      end
+
+      it 'attaches VC to records loaded through many_to_many association datasets' do
+        user = user_class.create(name: 'Test User', role: 'member')
+        group = group_class.create(name: 'Test Group')
+        DB[:privacy_group_members].insert(group_id: group.id, user_id: user.id)
+
+        user_vc = Sequel::Privacy::ViewerContext.for_actor(user)
+        group.for_vc(user_vc)
+        member = group.members_dataset.first
+
+        expect(member.viewer_context).to eq(user_vc)
       end
 
       describe 'add_* method' do
