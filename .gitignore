@@ -10,3 +10,4 @@ tmp/
 *.log
 example/example.db
 .rake_tasks~
+example/Gemfile.lock
