@@ -4,7 +4,9 @@ pkg/
 .ruby-lsp/
 coverage/
 .rspec_status
+spec/examples.txt
 tmp/
 *.tmp
 *.log
 example/example.db
+.rake_tasks~
