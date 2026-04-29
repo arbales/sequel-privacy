@@ -110,13 +110,12 @@ member.phone  # => nil if :view_phone denies
 
 ## Policy Definition
 
-Policies are lambdas that execute in the context of an `Actions` struct, giving access to `allow`, `deny`, and `pass` outcome methods, as well as the `all` combinator. `allow` and `deny` will end evaluation of the chain of policies, whereas `pass` will continue to the next policy in the chain.
+Policies are lambdas that execute in the context of an `Actions` class, giving access to `allow`, `deny`, and `pass` outcome methods, as well as the `all` combinator. `allow` and `deny` will end evaluation of the chain of policies, whereas `pass` will continue to the next policy in the chain.
 
-Policies are **actor-first**. Arities map to:
 - 0 args — global decision (`-> { allow if Time.now.sunday? }`)
-- 1 arg  — `(actor)`: role / identity checks
-- 2 args — `(actor, subject)`: ownership, membership
-- 3 args — `(actor, subject, direct_object)`: "can actor do X to subject with direct_object?"
+- 1 arg  — `(actor)`: Useful for role / identity checks
+- 2 args — `(actor, subject)`: General purpose relationship checks
+- 3 args — `(actor, subject, direct_object)`: "Allow members to remove themselves from a group they're in"
 
 Policies of arity ≥ 1 auto-deny for anonymous viewers (nil actor). Use `allow_anonymous: true` to opt out — meant for state-gate policies that examine only the subject.
 
@@ -175,7 +174,7 @@ policy :MyPolicy, ->() { ... },
 
 **`cacheable: true`** (default): Results are cached for the duration of the request, keyed by policy + arguments. Use for policies that don't depend on mutable state.
 
-**`single_match: true`**: Optimization for policies for which there is only one matching Actor possible for a given Subject. For example in `AllowAuthors`, since a `Post` can have only one other, it's not worth a potentially expensive check on other combinations once you've found the winner.
+**`single_match: true`**: Optimization for policies for which there is only one matching Actor possible for a given Subject. For example in `AllowAuthors`, since a `Post` can have only one author, it's not worth a potentially expensive check on other combinations once you've found the winner.
 
 **`cache_by:`** (Symbol or Array of `:actor`, `:subject`, `:direct_object`): Override the cache-key dimensions. By default the key uses every input the policy receives. Pass a subset when the policy ignores some of its inputs — e.g. `AllowAdmins` takes `(actor, subject)` but only examines actor, so `cache_by: :actor` shares one entry across subjects.
 
@@ -217,8 +216,27 @@ All-Powerful VCs bypass all privacy checks and are used in situations where the 
 to models. In a production setting, your application should prohibit raw Database access outside of the privacy-aware
 system, so these VCs give you an escape hatch for things like scripts while also keeping an audit trail. 
 
-`omniscient` and `all_powerful` require a reason (symbol) for audit logging.
+`omniscient` and `all_powerful` require a reason, given as a Symbol, for audit logging.
 You could also create lint rules that prevent the casual creation of these viewer contexts.
+
+```ruby
+# Standard viewer (most common)
+users_groups = Group.for_vc(current_vc).where(creator: current_user).all
+
+# Anonymous viewer (logged-out users)
+logged_out_vc = Sequel::Privacy::ViewerContext.anonymous
+posts = Post.for_vc(logged_out_vc).where(published: true).all
+
+# All-powerful ViewerContexts dangerously bypass all read and write checks.
+admin_vc = Sequel::Privacy::ViewerContext.all_powerful(:admin_migration)
+```
+
+### Login, Sessions & `current_user` and `current_vc`
+
+Unless you allow unsafe access to your User (or equivalent) model, you will need 
+a way to load it and create a ViewerContext for them. An Omniscient ViewerContext 
+is useful for this. Be sure to properly set to an Actor VC after you've logged-in 
+or materialized a user from the session. 
 
 ```ruby
 # You can use an omniscient viewer context to load the user from a session
@@ -235,18 +253,9 @@ def current_user
 end
 
 def current_vc
-  current_user&.vc || Sequel::Privacy::ViewerContext.anonymous()
+  current_user&.viewer_context || Sequel::Privacy::ViewerContext.anonymous()
 end
 
-# Standard viewer (most common)
-users_groups = Group.for_vc(current_vc).where(creator: current_user).all
-
-# Anonymous viewer (logged-out users)
-logged_out_vc = Sequel::Privacy::ViewerContext.anonymous
-posts = Post.for_vc(logged_out_vc).where(published: true).all
-
-# All-powerful ViewerContexts dangerously bypass all read and write checks.
-admin_vc = Sequel::Privacy::ViewerContext.all_powerful(:admin_migration)
 ```
 
 ## Mutation Enforcement
@@ -378,11 +387,10 @@ class PrivacyCacheMiddleware
 end
 ```
 
-Or manually:
+Or somewhere manually, like at the top of your Roda or Sinatra app:
 
 ```ruby
-Sequel::Privacy.cache.clear
-Sequel::Privacy.single_matches.clear
+Sequel::Privacy.clear_cache!
 ```
 
 ## Actor Interface
