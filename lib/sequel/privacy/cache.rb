@@ -8,7 +8,6 @@ module Sequel
     class << self
       extend T::Sig
 
-      # Returns the in-memory cache Hash for policy results.
       sig { returns(T::Hash[Integer, Symbol]) }
       def cache
         @cache ||= T.let({}, T.nilable(T::Hash[Integer, Symbol]))

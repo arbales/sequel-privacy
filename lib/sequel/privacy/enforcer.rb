@@ -3,8 +3,6 @@
 
 module Sequel
   module Privacy
-    # The Enforcer evaluates policy chains to determine if an action is allowed.
-    # It handles caching, single-match optimization, and policy combinators.
     module Enforcer
       extend T::Sig
 
@@ -138,9 +136,7 @@ module Sequel
         ).returns(Symbol)
       end
       def self.evaluate_child_policies(child_policies, subject, actor, viewer_context, direct_object)
-        unless child_policies.all? { |c| c.is_a?(Proc) }
-          Kernel.raise "Policy combinator contains non-policy members"
-        end
+        Kernel.raise 'Policy combinator contains non-policy members' unless child_policies.all? { |c| c.is_a?(Proc) }
 
         results = child_policies.map do |child_policy|
           policy_result(child_policy, subject, actor, viewer_context, direct_object)
@@ -190,14 +186,10 @@ module Sequel
         result ||= :pass
 
         # Handle combinator results
-        if result.is_a?(Array)
-          result = evaluate_child_policies(result, subject, actor, viewer_context, direct_object)
-        end
+        result = evaluate_child_policies(result, subject, actor, viewer_context, direct_object) if result.is_a?(Array)
 
         # Cache result
-        if policy.cacheable? && !from_cache
-          Sequel::Privacy.cache[cache_key] = result
-        end
+        Sequel::Privacy.cache[cache_key] = result if policy.cacheable? && !from_cache
 
         # Log result
         log_result(policy, result, actor, subject, from_cache, skipped_from_single_match)
@@ -227,9 +219,7 @@ module Sequel
         # Anonymous viewers (no actor) auto-deny unless the policy opts in
         # with allow_anonymous: true (for state-gate policies that examine
         # only the subject).
-        if !actor && policy.arity >= 1 && !policy.allow_anonymous?
-          return :deny
-        end
+        return :deny if !actor && policy.arity >= 1 && !policy.allow_anonymous?
 
         case policy.arity
         when 0
@@ -259,14 +249,14 @@ module Sequel
         actor_id = actor ? actor.id : 'anonymous'
         logger.debug do
           msg = "#{result.to_s.upcase}: #{policy.policy_name || 'anonymous'} for actor[#{actor_id}] on #{subject.class}[#{subject_id(subject)}]"
-          msg += " (cached)" if from_cache
-          msg += " (skipped: single_match)" if skipped
+          msg += ' (cached)' if from_cache
+          msg += ' (skipped: single_match)' if skipped
           msg
         end
 
-        if policy.comment && %i[deny allow].include?(result)
-          logger.debug { " ⮑  #{policy.comment}" }
-        end
+        return unless policy.comment && %i[deny allow].include?(result)
+
+        logger.debug { " ⮑  #{policy.comment}" }
       end
 
       sig { params(subject: TPolicySubject).returns(T.untyped) }

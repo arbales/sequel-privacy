@@ -28,18 +28,20 @@ class App < Roda
     # middleware, but shown here for simplicity.
     Sequel::Privacy.clear_cache!
 
-    # This is a placeholder for however you choose to handle authentication and sessions
     # Since User is privacy-aware, you'll need to use an omniscient Viewer Context
     # in order to load it even for login.
     @current_user = r.params['session_user_id']&.to_i&.then { |id|
-      User.for_vc(Sequel::Privacy::ViewerContext.omniscient(:for_login))[id]
+      u = User.for_vc(Sequel::Privacy::ViewerContext.omniscient(:for_login))[id]
+      next nil unless u
+
+      # Attach an ActorVC to the loaded user so that subsequent calls to it
+      # load using the appropriate context.
+      u.for_vc(Sequel::Privacy::ViewerContext.for_actor(u))
     }
 
-    # The user and the viewercontext are distinct, though typically the VC will be an actor vc that matches the users.
-    # If there's not a current user, an anonymous VC is created so you can load objects that may be both privacy-aware *and*
-    # offer a truly public view. You could imagine that Profiles on a social app can be seen by logged out users,
-    # even if most of their fields and associations can only be viewed by logged-in users.
-    @current_vc = @current_user ? Sequel::Privacy::ViewerContext.for_actor(@current_user) : Sequel::Privacy::ViewerContext.anonymous
+    # If there is not a current_user, then provide an anonymous viewer_context to load
+    # purely public content like a published blog post.
+    @current_vc = @current_user ? @current_user.viewer_context : Sequel::Privacy::ViewerContext.anonymous
 
     r.on 'users' do
       r.is do

@@ -221,54 +221,32 @@ system, so these VCs give you an escape hatch for things like scripts while also
 You could also create lint rules that prevent the casual creation of these viewer contexts.
 
 ```ruby
-# Standard viewer (most common)
-current_vc = Sequel::Privacy::ViewerContext.for_actor(current_user)
-users_groups = Group.for_vc(current_vc).where(creator: current_user).all
+# You can use an omniscient viewer context to load the user from a session
+# or however you store them. Discard this viewer context when you're done with it.
+def current_user 
+  return @current_user if @current_user
+  login_vc = Sequel::Privacy::ViewerContext.omniscient(:login)
+  user = User.for_vc(login_vc)[session_user_id]
+  return nil unless user
 
-# API-specific (can be distinguished in policies)
-vc = Sequel::Privacy::ViewerContext.for_api_actor(current_user)
+  # Attach an ActorVC to the loaded user so that future calls to its fields and 
+  # associations respect privacy .
+  @current_user ||= user.for_vc(Sequel::Privacy::ViewerContext.for_actor(user))
+end
+
+def current_vc
+  current_user&.vc || Sequel::Privacy::ViewerContext.anonymous()
+end
+
+# Standard viewer (most common)
+users_groups = Group.for_vc(current_vc).where(creator: current_user).all
 
 # Anonymous viewer (logged-out users)
 logged_out_vc = Sequel::Privacy::ViewerContext.anonymous
 posts = Post.for_vc(logged_out_vc).where(published: true).all
 
-# Omniscient VCs can read any object in the system, but are incapable of writes.
-# Dispose of these ViewerContexts quickly. 
-current_user = Sequel::Privacy::ViewerContext.omniscient(:login).then {|vc| User.for_vc(vc)[authenticated_user_id] }
-current_vc = Sequel::Privacy::ViewerContext.for_actor(current_user)
-
 # All-powerful ViewerContexts dangerously bypass all read and write checks.
 admin_vc = Sequel::Privacy::ViewerContext.all_powerful(:admin_migration)
-```
-
-### A Note Login & Authenticated Users
-
-If your User or equivalent model is privacy-aware *and* is protected by 
-policies that would complicating fetching (or login), then you will have
-trouble creating a `current_user` for an `ActorVC`.
-
-In both cases you can use an `OmniscientVC` to make your initial User query.
-
-```ruby
-before do
-  if session[:user_id]
-    current_user = Sequel::Privacy::ViewerContext.omniscient(:session).then {|vc| User.for_vc(vc)[session[:user_id]] }
-    current_vc = Sequel::Privacy::ViewerContext.for_actor(current_user)
-  else
-    current_user = nil
-    current_vc = Sequel::Privacy::ViewerContext.anonymous
-  end
-end
-
-post '/auth/password' do
-  user = Sequel::Privacy::ViewerContext.omniscient(:login).then {|vc| User.for_vc(vc).first(email: params[:email]) }  
-  
-  pass unless user
-  pass unless user.password == params[:password]
-  
-  session[:user_id] = user.id
-  redirect '/'
-end
 ```
 
 ## Mutation Enforcement

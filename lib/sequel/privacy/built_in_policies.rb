@@ -3,10 +3,9 @@
 
 module Sequel
   module Privacy
-    # Built-in policies that ship with the gem.
-    # Applications should define their own policies using PolicyDSL.
     module BuiltInPolicies
-      # Always deny access. Should be the last policy in every chain (fail-secure).
+      # Always deny access. You should specify this policy at the end of every chain, but the framework
+      # currently appends it. This could change; I'm not sure about this yet.
       AlwaysDeny = Policy.create(
         :AlwaysDeny,
         -> { :deny },
@@ -14,7 +13,6 @@ module Sequel
         cacheable: true
       )
 
-      # Always allow access. Use sparingly.
       AlwaysAllow = Policy.create(
         :AlwaysAllow,
         -> { :allow },
