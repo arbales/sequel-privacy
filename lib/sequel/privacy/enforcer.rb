@@ -16,7 +16,6 @@ module Sequel
       class << self
         extend T::Sig
 
-        # Returns the centralized logger from Sequel::Privacy.logger
         sig { returns(T.untyped) }
         def logger
           Sequel::Privacy.logger
@@ -28,13 +27,8 @@ module Sequel
         Thread.current[EVAL_KEY] == true
       end
 
-      # Main entry point for policy evaluation.
-      #
-      # @param policies [Array<Policy, Proc>] The policy chain to evaluate
-      # @param subject [Sequel::Model] The object being accessed
-      # @param viewer_context [ViewerContext] Who is accessing the object
-      # @param direct_object [Sequel::Model, nil] Optional additional context object
-      # @return [Boolean] true if access is allowed, false otherwise
+      # Evaluates a policy chain against (subject, viewer_context, direct_object)
+      # and returns whether access is allowed.
       sig do
         params(
           policies: TPolicyArray,
@@ -48,7 +42,6 @@ module Sequel
         Thread.current[EVAL_KEY] = true
 
         begin
-          # All-powerful and omniscient contexts bypass all checks
           if viewer_context.is_a?(AllPowerfulVC)
             logger&.warn('BYPASS: All-powerful viewer context bypasses all privacy rules.')
             return true
@@ -66,7 +59,7 @@ module Sequel
             policies = [BuiltInPolicies::AlwaysDeny]
           end
 
-          # Ensure policy chain ends with AlwaysDeny (fail-secure)
+          # Fail-secure: every chain ends with AlwaysDeny.
           unless policies.last == BuiltInPolicies::AlwaysDeny
             logger&.warn { 'Policy chain should end with AlwaysDeny. Appending it.' }
             policies = policies.dup << BuiltInPolicies::AlwaysDeny
@@ -148,7 +141,6 @@ module Sequel
         :pass
       end
 
-      # Evaluate a single policy and return its result
       sig do
         params(
           uncasted_policy: T.any(TPolicy, Proc),
@@ -164,7 +156,6 @@ module Sequel
 
         policy = T.cast(uncasted_policy, TPolicy, checked: false)
 
-        # Single-match optimization
         if policy.single_match?
           match_key = [policy, actor, viewer_context].hash
           if (matched = Sequel::Privacy.single_matches[match_key]) && matched != subject.hash
@@ -173,7 +164,6 @@ module Sequel
           end
         end
 
-        # Check cache
         cache_key = compute_cache_key(policy, subject, actor, viewer_context, direct_object)
         if !skipped_from_single_match && policy.cacheable? && Sequel::Privacy.cache.key?(cache_key)
           from_cache = true
@@ -181,20 +171,15 @@ module Sequel
           Kernel.raise InvalidPolicyOutcomeError unless result && valid_outcome?(result)
         end
 
-        # Execute policy if not cached
         result ||= execute_policy(policy, subject, actor, direct_object)
         result ||= :pass
 
-        # Handle combinator results
         result = evaluate_child_policies(result, subject, actor, viewer_context, direct_object) if result.is_a?(Array)
 
-        # Cache result
         Sequel::Privacy.cache[cache_key] = result if policy.cacheable? && !from_cache
 
-        # Log result
         log_result(policy, result, actor, subject, from_cache, skipped_from_single_match)
 
-        # Record single-match
         if policy.single_match? && result == :allow
           Sequel::Privacy.single_matches[[policy, actor, viewer_context].hash] = subject.hash
         end
@@ -215,10 +200,9 @@ module Sequel
         ).returns(T.untyped)
       end
       def self.execute_policy(policy, subject, actor, direct_object)
-        # Policies with arity >= 1 expect an actor as the first arg.
-        # Anonymous viewers (no actor) auto-deny unless the policy opts in
-        # with allow_anonymous: true (for state-gate policies that examine
-        # only the subject).
+        # Arity ≥ 1 policies expect an actor as the first arg; an
+        # anonymous viewer auto-denies unless the policy opts in with
+        # `allow_anonymous: true` (for subject-only state gates).
         return :deny if !actor && policy.arity >= 1 && !policy.allow_anonymous?
 
         case policy.arity

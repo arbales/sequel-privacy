@@ -36,7 +36,6 @@ module Sequel
     module Privacy
       extend T::Sig
 
-      # Called once when plugin first loads on a model
       sig { params(model: T.class_of(Sequel::Model), _opts: T::Hash[Symbol, T.untyped]).void }
       def self.apply(model, _opts = {})
         model.instance_variable_set(:@privacy_policies, {})
@@ -46,13 +45,9 @@ module Sequel
         model.instance_variable_set(:@allow_unsafe_access, false)
       end
 
-      # Called every time plugin loads (for per-model configuration)
       sig { params(model: T.class_of(Sequel::Model), opts: T::Hash[Symbol, T.untyped]).void }
-      def self.configure(model, opts = {})
-        # Currently no per-model configuration needed
-      end
+      def self.configure(model, opts = {}); end
 
-      # DSL class for defining association-level privacy policies
       class AssociationPrivacyDSL
         extend T::Sig
 
@@ -67,7 +62,6 @@ module Sequel
           @pending_policies = T.let({}, T::Hash[Symbol, T::Array[T.untyped]])
         end
 
-        # Define policies for association actions (:add, :remove, :remove_all)
         sig { params(action: Symbol, policies: T.untyped).void }
         def can(action, *policies)
           unless %i[add remove remove_all].include?(action)
@@ -80,17 +74,15 @@ module Sequel
           T.must(@pending_policies[action]).concat(resolved)
         end
 
-        # Called after the association block is evaluated to register all policies at once
         sig { void }
         def finalize_association!
           @pending_policies.each do |action, policies|
-            @model_class.register_association_policies(@assoc_name, action, policies, defer_setup: true)
+            @model_class.register_association_policies(@assoc_name, action, policies)
           end
           @model_class.setup_association_privacy(@assoc_name)
         end
       end
 
-      # DSL class for defining privacy policies in a block
       class PrivacyDSL
         extend T::Sig
 
@@ -99,14 +91,12 @@ module Sequel
           @model_class = model_class
         end
 
-        # Define policies for an action
         sig { params(action: Symbol, policies: T.untyped).void }
         def can(action, *policies)
           resolved = resolve_policies(policies)
           @model_class.register_policies(action, resolved)
         end
 
-        # Define a protected field with its policies
         sig { params(name: Symbol, policies: T.untyped).void }
         def field(name, *policies)
           resolved = resolve_policies(policies)
@@ -115,14 +105,6 @@ module Sequel
           @model_class.register_protected_field(name, policy_name)
         end
 
-        # Define policies for an association
-        #
-        # Example:
-        #   association :members do
-        #     can :add, AllowGroupAdmin, AllowSelfJoin
-        #     can :remove, AllowGroupAdmin, AllowSelfRemove
-        #     can :remove_all, AllowGroupAdmin
-        #   end
         sig { params(name: Symbol, block: T.proc.bind(AssociationPrivacyDSL).void).void }
         def association(name, &block)
           resolver = ->(policies) { resolve_policies(policies) }
@@ -131,7 +113,6 @@ module Sequel
           dsl.finalize_association!
         end
 
-        # Finalize privacy settings (no more changes allowed)
         sig { void }
         def finalize!
           @model_class.finalize_privacy!
@@ -158,7 +139,6 @@ module Sequel
 
         requires_ancestor { T.class_of(Sequel::Model) }
 
-        # Register inherited instance variables for proper subclass handling
         Sequel::Plugins.inherited_instance_variables(
           self,
           :@privacy_policies => :dup,
@@ -168,12 +148,8 @@ module Sequel
           :@allow_unsafe_access => nil
         )
 
-        # ─────────────────────────────────────────────────────────────────────
-        # Strict Mode Enforcement
-        # ─────────────────────────────────────────────────────────────────────
-
-        # Allow this model to be accessed without a ViewerContext.
-        # Use during migration to gradually enable strict mode.
+        # Allows the model to be accessed without a ViewerContext,
+        # useful when you're migrating an existing codebase or adopting gradually.
         sig { void }
         def allow_unsafe_access!
           @allow_unsafe_access = T.let(true, T.nilable(T::Boolean))
@@ -185,20 +161,15 @@ module Sequel
           @allow_unsafe_access == true
         end
 
-        # Thread-local key for storing the current ViewerContext during row processing
+        # Per-class thread-local key carrying the current VC during row
+        # materialization.
         sig { returns(Symbol) }
         def privacy_vc_key
           :"#{self}_privacy_vc"
         end
 
-        # Override Sequel's call method to act as a strict-mode gate.
-        # Every database-loaded record flows through here (Model[id],
-        # Model.first, Model.all, associations, ...). This checks that a
-        # VC is in scope (or that the class opted out via
-        # allow_unsafe_access!) and defers VC attachment and :view
-        # filtering to DatasetMethods#row_proc — those are per-row
-        # concerns and have context-dependent bypasses (policy
-        # evaluation, eager-load attachment) that don't belong here.
+        # The primary integration point; every Sequel::Model materialization
+        # flows through here.
         sig { params(values: T.untyped).returns(T.nilable(Sequel::Model)) }
         def call(values)
           vc = Thread.current[privacy_vc_key]
@@ -211,10 +182,6 @@ module Sequel
           super
         end
 
-        # ─────────────────────────────────────────────────────────────────────
-        # Policy Definition DSL
-        # ─────────────────────────────────────────────────────────────────────
-
         sig { returns(T::Hash[Symbol, T::Array[T.untyped]]) }
         def privacy_policies
           @privacy_policies ||= T.let({}, T.nilable(T::Hash[Symbol, T::Array[T.untyped]]))
@@ -225,7 +192,6 @@ module Sequel
           @privacy_fields ||= T.let({}, T.nilable(T::Hash[Symbol, Symbol]))
         end
 
-        # Returns association policies: { assoc_name => { action => [policies] } }
         sig { returns(T::Hash[Symbol, T::Hash[Symbol, T::Array[T.untyped]]]) }
         def privacy_association_policies
           @privacy_association_policies ||= T.let({}, T.nilable(T::Hash[Symbol, T::Hash[Symbol, T::Array[T.untyped]]]))
@@ -236,11 +202,9 @@ module Sequel
           @privacy_finalized == true
         end
 
-        # DSL entry point for defining privacy policies
+        # Entry point for the privacy DSL. The block is evaluated in the
+        # context of a `PrivacyDSL` instance:
         #
-        # @yield Block evaluated in context of PrivacyDSL
-        #
-        # Example:
         #   privacy do
         #     can :view, P::AllowMembers
         #     can :edit, P::AllowSelf, P::AllowAdmins
@@ -256,7 +220,6 @@ module Sequel
           dsl.instance_eval(&block)
         end
 
-        # Register policies for an action (called by PrivacyDSL)
         sig { params(action: Symbol, policies: T::Array[T.untyped]).void }
         def register_policies(action, policies)
           if privacy_finalized?
@@ -267,7 +230,6 @@ module Sequel
           T.must(privacy_policies[action]).concat(policies)
         end
 
-        # Register a protected field (called by PrivacyDSL)
         sig { params(field: Symbol, policy_name: Symbol).void }
         def register_protected_field(field, policy_name)
           if privacy_finalized?
@@ -276,13 +238,9 @@ module Sequel
 
           privacy_fields[field] = policy_name
 
-          # Store original method
           original_method = instance_method(field)
 
-          # Override the field getter
           define_method(field) do
-            # During nested policy evaluation, return raw value without
-            # checking the field's view policy.
             return original_method.bind(self).() if Sequel::Privacy::Enforcer.in_policy_eval?
 
             vc = instance_variable_get(:@viewer_context)
@@ -301,23 +259,20 @@ module Sequel
           end
         end
 
-        # Register association policies (called by AssociationPrivacyDSL)
-        # @param defer_setup [Boolean] If true, don't set up wrappers yet (caller will call setup_association_privacy)
-        sig { params(assoc_name: Symbol, action: Symbol, policies: T::Array[T.untyped], defer_setup: T::Boolean).void }
-        def register_association_policies(assoc_name, action, policies, defer_setup: false)
+        # The caller is responsible for invoking `setup_association_privacy`
+        # once all actions have been registered.
+        sig { params(assoc_name: Symbol, action: Symbol, policies: T::Array[T.untyped]).void }
+        def register_association_policies(assoc_name, action, policies)
           Kernel.raise "Privacy policies have been finalized for #{self}" if privacy_finalized?
 
           privacy_association_policies[assoc_name] ||= {}
           assoc_hash = T.must(privacy_association_policies[assoc_name])
           assoc_hash[action] ||= []
           T.must(assoc_hash[action]).concat(policies)
-
-          # Set up the association method overrides if the association exists (unless deferred)
-          setup_association_privacy(assoc_name) if !defer_setup && association_reflection(assoc_name)
         end
 
-        # Set up privacy-wrapped add_*/remove_*/remove_all_* methods for an association
-        # This is called after all policies for an association have been registered
+        # Wraps add_*/remove_*/remove_all_* methods on an association
+        # with privacy checks. Idempotent.
         sig { params(assoc_name: Symbol).void }
         def setup_association_privacy(assoc_name)
           assoc_policies = privacy_association_policies[assoc_name]
@@ -326,46 +281,39 @@ module Sequel
           reflection = association_reflection(assoc_name)
           return unless reflection
 
-          # Track which associations have been wrapped to avoid double-wrapping
           @_wrapped_associations ||= T.let({}, T.nilable(T::Hash[Symbol, T::Boolean]))
           return if @_wrapped_associations[assoc_name]
 
           @_wrapped_associations[assoc_name] = true
 
-          # Determine the singular name for method naming
-          # For many_to_many :members, methods are add_member, remove_member
-          # For one_to_many :memberships, methods are add_membership, remove_membership
+          # Sequel derives mutator names by stripping a trailing 's' from
+          # the association name: many_to_many :members → add_member,
+          # one_to_many :memberships → add_membership.
+          #
+          # TODO: I'm not sure if this will break sometimes.
           singular_name = reflection[:name].to_s.chomp('s').to_sym
 
-          # Wrap add_* method if :add policy exists
           add_policies = assoc_policies[:add]
           if add_policies && method_defined?(:"add_#{singular_name}")
             _wrap_association_add(assoc_name, singular_name, add_policies)
           end
 
-          # Wrap remove_* method if :remove policy exists
           remove_policies = assoc_policies[:remove]
           if remove_policies && method_defined?(:"remove_#{singular_name}")
             _wrap_association_remove(assoc_name, singular_name, remove_policies)
           end
 
-          # Wrap remove_all_* method if :remove_all policy exists
           remove_all_policies = assoc_policies[:remove_all]
           return unless remove_all_policies && method_defined?(:"remove_all_#{reflection[:name]}")
 
           _wrap_association_remove_all(assoc_name, reflection[:name], remove_all_policies)
         end
 
-        # Finalize privacy settings (no more changes allowed)
-        # TODO: Explore automatic finalization on first query
+        # TODO: explore automatic finalization on first query.
         sig { void }
         def finalize_privacy!
           @privacy_finalized = T.let(true, T.nilable(T::Boolean))
         end
-
-        # ─────────────────────────────────────────────────────────────────────
-        # Deprecated Methods (for backwards compatibility)
-        # ─────────────────────────────────────────────────────────────────────
 
         # @deprecated Use `privacy do; can :action, ...; end` instead
         sig { params(action: Symbol, policy_chain: T.untyped).void }
@@ -379,7 +327,6 @@ module Sequel
         def protect_field(field, policy: nil)
           Kernel.warn "DEPRECATED: #{self}.protect_field is deprecated. Use `privacy do; field :#{field}, ...; end` instead"
           policy_name = policy || :"view_#{field}"
-          # Need to also register the policy if not already defined
           register_protected_field(field, policy_name)
         end
 
@@ -389,19 +336,11 @@ module Sequel
           dataset.for_vc(vc)
         end
 
-        # ─────────────────────────────────────────────────────────────────────
-        # Association Privacy (hooks into association creation)
-        # ─────────────────────────────────────────────────────────────────────
-
-        # Override Sequel's associate method to wrap associations with privacy checks
         sig { params(type: Symbol, name: Symbol, opts: T.untyped, block: T.untyped).returns(T.untyped) }
         def associate(type, name, opts = {}, &block)
           opts = _inject_privacy_eager_block(opts)
-
-          # Call original to create the association
           result = super
 
-          # Wrap the association method with privacy checks
           case type
           when :many_to_one, :one_to_one
             _override_singular_association(name)
@@ -409,18 +348,15 @@ module Sequel
           when :one_to_many, :many_to_many
             _override_plural_association(name)
             _override_association_dataset(name)
-            # Check if there are already privacy policies defined for this association
             setup_association_privacy(name) if privacy_association_policies[name]
           end
 
           result
         end
 
-        # Wrap the association's eager-load dataset with for_vc() so the
-        # child rows are materialized with the current viewer context.
-        # The VC is propagated via a thread-local set by DatasetMethods#all
-        # so that it's only applied during eager loading, not during the
-        # lazy association reader path (which has its own handling).
+        # Inject an :eager_block that wraps the eager-load dataset with
+        # `for_vc` when a VC is propagated via EAGER_VC_KEY (see
+        # DatasetMethods#post_load). Preserves any user-supplied block.
         sig { params(opts: T::Hash[Symbol, T.untyped]).returns(T::Hash[Symbol, T.untyped]) }
         def _inject_privacy_eager_block(opts)
           original = opts[:eager_block]
@@ -465,15 +401,13 @@ module Sequel
         def _override_singular_association(name)
           original = instance_method(name)
           assoc_reflection = association_reflection(name)
+          # Resolve lazily to handle forward references between models.
           assoc_class = T.let(nil, T.nilable(T.class_of(Sequel::Model)))
 
           define_method(name) do
             vc = instance_variable_get(:@viewer_context)
-
-            # Determine associated class (lazily, to handle forward references)
             assoc_class ||= assoc_reflection.associated_class
 
-            # Load association with VC context set if available
             obj = if vc && assoc_class.respond_to?(:privacy_vc_key)
                     vc_key = assoc_class.privacy_vc_key
                     old_vc = Thread.current[vc_key]
@@ -510,11 +444,8 @@ module Sequel
 
           define_method(name) do
             vc = instance_variable_get(:@viewer_context)
-
-            # Determine associated class (lazily, to handle forward references)
             assoc_class ||= assoc_reflection.associated_class
 
-            # Load association with VC context set if available
             objs = if vc && assoc_class.respond_to?(:privacy_vc_key)
                      vc_key = assoc_class.privacy_vc_key
                      old_vc = Thread.current[vc_key]
@@ -564,7 +495,6 @@ module Sequel
                            "Cannot #{method_name} with OmniscientVC"
             end
 
-            # Check policy with 3-arity: (subject=self, actor, direct_object=obj)
             allowed = Sequel::Privacy::Enforcer.enforce(policies, self, vc, obj)
 
             unless allowed
@@ -596,7 +526,6 @@ module Sequel
                            "Cannot #{method_name} with OmniscientVC"
             end
 
-            # Check policy with 3-arity: (subject=self, actor, direct_object=obj)
             allowed = Sequel::Privacy::Enforcer.enforce(policies, self, vc, obj)
 
             unless allowed
@@ -628,7 +557,6 @@ module Sequel
                            "Cannot #{method_name} with OmniscientVC"
             end
 
-            # Check policy with 2-arity: (subject=self, actor) - no direct object for remove_all
             allowed = Sequel::Privacy::Enforcer.enforce(policies, self, vc)
 
             unless allowed
@@ -658,19 +586,12 @@ module Sequel
           @viewer_context = T.let(vc, T.nilable(Sequel::Privacy::ViewerContext))
         end
 
-        # Attach a viewer context to this model instance
         sig { params(vc: Sequel::Privacy::ViewerContext).returns(T.self_type) }
         def for_vc(vc)
           @viewer_context = T.let(vc, T.nilable(Sequel::Privacy::ViewerContext))
           self
         end
 
-        # Check if the viewer is allowed to perform an action.
-        #
-        # @param vc [ViewerContext] The viewer context
-        # @param action [Symbol] The action to check (:view, :edit, :create, etc.)
-        # @param direct_object [Sequel::Model, nil] Optional additional context
-        # @return [Boolean]
         sig do
           params(
             vc: Sequel::Privacy::ViewerContext,
@@ -688,7 +609,6 @@ module Sequel
           Sequel::Privacy::Enforcer.enforce(policies, self, vc, direct_object)
         end
 
-        # Override save to check privacy policies
         sig { params(opts: T.untyped).returns(T.nilable(T.self_type)) }
         def save(*opts)
           vc = viewer_context
@@ -716,7 +636,6 @@ module Sequel
           super
         end
 
-        # Override update to check privacy policies
         sig { params(hash: T::Hash[Symbol, T.untyped]).returns(T.self_type) }
         def update(hash)
           vc = viewer_context
@@ -739,15 +658,13 @@ module Sequel
 
         private
 
-        # Typed view of the model class for accessing methods mixed in by the
-        # privacy plugin. The cast is sound because every class that includes
-        # InstanceMethods also extends ClassMethods (via mixes_in_class_methods).
+        # Every class that includes InstanceMethods also extends ClassMethods
+        # via `mixes_in_class_methods`, so this should always work.
         sig { returns(ClassMethods) }
         def _privacy_class
           T.cast(self.class, ClassMethods)
         end
 
-        # Override delete to block OmniscientVC
         sig { returns(T.self_type) }
         def delete
           if viewer_context.is_a?(Sequel::Privacy::OmniscientVC)
@@ -769,23 +686,17 @@ module Sequel
         # datasets via the :eager_block injected in ClassMethods#associate.
         EAGER_VC_KEY = :sequel_privacy_eager_vc
 
-        # Attach viewer context to dataset for privacy enforcement on materialization
         sig { params(vc: Sequel::Privacy::ViewerContext).returns(Sequel::Dataset) }
         def for_vc(vc)
           clone(viewer_context: vc)
         end
 
-        # Override row_proc to wrap Model.call with the full per-row
-        # privacy pipeline: set the thread-local VC so Model.call's
-        # strict-mode gate passes, attach the VC to the instance, and
-        # apply the :view filter — with two bypasses for materialization
-        # contexts where filtering would be wrong or break callers:
-        #   - in_policy_eval?: policies that traverse protected data
-        #     need raw rows so their checks (e.g. membership) aren't
-        #     short-circuited by recursive :view filtering.
-        #   - EAGER_VC_KEY: Sequel's eager-load attachment block
-        #     dereferences each record to bucket by FK and would crash
-        #     on nils; the association reader filters at read time.
+        # Stores the ViewerContext in a Thread-local that Model.call
+        # can retreive. Materializes the model, and then checks the view
+        # policy. If the model is being materialized within the context of
+        # checking a policy this is bypassed, because policies often need to
+        # check data that a VC might not have permission to see. The check is also
+        # bypassed for eager loads, and checked on the association.
         sig { returns(T.untyped) }
         def row_proc
           vc = opts[:viewer_context]
@@ -817,25 +728,18 @@ module Sequel
           end
         end
 
-        # Override all to filter out nil results from privacy checks
         sig { returns(T::Array[T.attached_class]) }
         def all
           results = super
           opts[:viewer_context] ? results.compact : results
         end
 
-        # Sequel calls post_load after rows are fetched but before any
-        # user block. Model's override of post_load triggers eager_load
-        # here. Set the thread-local VC around that call so each
-        # association's injected :eager_block can wrap its child dataset
-        # with for_vc. Children are then materialized with VC attached
-        # but without :view filtering (see Model.call), so Sequel's
-        # attachment block doesn't choke on nils; the accessor wrapper
-        # filters at read time.
-        #
-        # Parents filtered to nil by the :view policy must be dropped
-        # before eager_load runs — its attachment code dereferences each
-        # record, which nil would break.
+        # Sequel's Model#post_load triggers eager_load. We expose the VC
+        # via EAGER_VC_KEY around that call so the :eager_block injected
+        # in ClassMethods#associate can wrap each child dataset with
+        # for_vc. Parents already filtered to nil by row_proc must be
+        # compacted first — eager_load's attachment code can't handle
+        # nil records.
         sig { params(all_records: T.untyped).returns(T.untyped) }
         def post_load(all_records)
           vc = opts[:viewer_context]
@@ -852,7 +756,6 @@ module Sequel
           end
         end
 
-        # Create a new model instance with the viewer context attached
         sig { params(values: T::Hash[Symbol, T.untyped]).returns(T.attached_class) }
         def new(values = {})
           instance = T.unsafe(model).new(values)
@@ -862,7 +765,6 @@ module Sequel
           instance
         end
 
-        # Create and save a new model instance with the viewer context attached
         sig { params(values: T::Hash[Symbol, T.untyped]).returns(T.attached_class) }
         def create(values = {})
           T.cast(new(values), Sequel::Model).save

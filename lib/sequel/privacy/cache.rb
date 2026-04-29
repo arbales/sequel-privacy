@@ -3,8 +3,8 @@
 
 module Sequel
   module Privacy
-    # In-memory cache for policy evaluation results.
-    # Should be cleared between requests (e.g., via Rack middleware).
+    # In-memory cache for policy evaluation results. Clear between
+    # requests (e.g. via Rack middleware).
     class << self
       extend T::Sig
 
@@ -13,15 +13,13 @@ module Sequel
         @cache ||= T.let({}, T.nilable(T::Hash[Integer, Symbol]))
       end
 
-      # Returns the hash tracking single-match optimizations.
-      # Key: [policy, actor, viewer_context].hash
-      # Value: subject.hash that matched
+      # Tracks single-match optimization state.
+      # Key: [policy, actor, viewer_context].hash → Value: subject.hash
       sig { returns(T::Hash[Integer, Integer]) }
       def single_matches
         @single_matches ||= T.let({}, T.nilable(T::Hash[Integer, Integer]))
       end
 
-      # Clear all caches. Call this between requests.
       sig { void }
       def clear_cache!
         @cache = {}

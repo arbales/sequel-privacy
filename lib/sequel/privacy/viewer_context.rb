@@ -3,43 +3,40 @@
 
 module Sequel
   module Privacy
-    # ViewerContext represents who is viewing/accessing data.
-    # All privacy checks require a viewer context to determine what the viewer can see.
+    # Represents who is viewing/accessing data. All privacy checks require
+    # a ViewerContext.
     class ViewerContext
       extend T::Sig
       extend T::Helpers
       abstract!
 
-      # Create a standard viewer context for an actor
       sig { params(actor: IActor).returns(ActorVC) }
       def self.for_actor(actor)
         ActorVC.new(actor)
       end
 
-      # Create an API-specific viewer context
       sig { params(actor: IActor).returns(APIVC) }
       def self.for_api_actor(actor)
         APIVC.new(actor)
       end
 
-      # Create an all-powerful viewer context that bypasses all privacy checks.
-      # Use sparingly and always provide a reason for audit logging.
+      # Bypasses all privacy checks; requires a reason for audit logging.
+      # Use sparingly.
       sig { params(reason: Symbol).returns(AllPowerfulVC) }
       def self.all_powerful(reason)
         Sequel::Privacy.logger&.info("Creating all-powerful viewer context: #{reason}")
         AllPowerfulVC.new(reason)
       end
 
-      # Create an omniscient viewer context that can see everything but cannot mutate.
-      # Used for system operations like authentication lookups.
+      # Reads any record but cannot mutate. For system operations like
+      # authentication lookups.
       sig { params(reason: Symbol).returns(OmniscientVC) }
       def self.omniscient(reason)
         Sequel::Privacy.logger&.debug("Creating omniscient viewer context: #{reason}")
         OmniscientVC.new(reason)
       end
 
-      # Create an anonymous viewer context for logged-out users.
-      # Subject to normal policy evaluation with no actor.
+      # No actor; subject to normal policy evaluation. For logged-out users.
       sig { returns(AnonymousVC) }
       def self.anonymous
         AnonymousVC.new
@@ -94,8 +91,6 @@ module Sequel
       attr_reader :reason
     end
 
-    # Anonymous viewer context for logged-out users.
-    # Has no actor - policies with arity >= 1 will auto-deny.
     class AnonymousVC < ViewerContext
       extend T::Sig
 
@@ -105,7 +100,6 @@ module Sequel
       end
     end
 
-    # Type alias for viewer contexts
     TViewerContext = T.type_alias { ViewerContext }
   end
 end

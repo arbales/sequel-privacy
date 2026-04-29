@@ -3,8 +3,7 @@
 
 module Sequel
   module Privacy
-    # Interface that actors (typically User/Member models) must implement
-    # to be used with the privacy system.
+    # Interface for actors used in viewer contexts (typically User/Member).
     module IActor
       extend T::Sig
       extend T::Helpers

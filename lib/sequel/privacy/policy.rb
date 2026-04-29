@@ -27,8 +27,6 @@ module Sequel
 
       VALID_CACHE_BY = T.let(%i[actor subject direct_object].freeze, T::Array[Symbol])
 
-      # Factory method for creating policies. Accepts procs of any arity
-      # (0–3 args) returning :allow, :deny, :pass, or an Array of policies.
       sig do
         params(
           policy_name: Symbol,
@@ -52,24 +50,23 @@ module Sequel
         )
       end
 
-      # Configure the policy after creation
+      # Configure the policy after creation, normally done with the shorthand `policy` call.
       #
       # @param policy_name [Symbol, nil] Human-readable name for logging
       # @param comment [String, nil] Description of what this policy does
       # @param cacheable [Boolean] Whether results can be cached (default: true)
       # @param single_match [Boolean] Whether only one subject/actor pair can match (default: false)
       # @param cache_by [Symbol, Array<Symbol>, nil] Override the cache-key
-      #   dimensions. By default the key is derived from the policy's arity
-      #   (all inputs the policy receives). Pass a subset of
-      #   `:actor, :subject, :direct_object` to cache by only those — useful
-      #   when the policy ignores inputs it nominally receives (e.g. an
-      #   "is-admin" check that takes `(actor, subject)` but only examines
+      #   dimensions. By default the key is derived from the policy's arity,
+      #   but you might want to pass a subset of `:actor, :subject, :direct_object` 
+      #   to cache by only those; useful when the policy ignores inputs (e.g. an
+      #   "is-admin" check that takes `(actor, subject)` but only looks at
       #   actor should use `cache_by: :actor` to share a single entry across
       #   subjects).
       # @param allow_anonymous [Boolean] If true, skip the auto-deny that
       #   normally fires when a policy of arity >= 1 is evaluated for an
-      #   anonymous viewer (nil actor). Use for state-gate policies that
-      #   ignore the actor and decide purely on subject state.
+      #   anonymous viewer (nil actor). This is a bit inelegant; it'd be great
+      #   if we could tell that an argument isn't used at all. 
       def setup(policy_name: nil, comment: nil, cacheable: true, single_match: false, cache_by: nil,
                 allow_anonymous: false)
         raise 'Privacy Policy is frozen' if @frozen
@@ -89,8 +86,9 @@ module Sequel
         @cacheable || false
       end
 
-      # Single-match optimization: when true, once a policy allows for a subject/actor pair,
-      # skip evaluation for other subjects (e.g., AllowIfActorIsSelf - only one subject matches)
+      # When set, once the policy allows for a given actor it short-circuits
+      # to :pass on every other subject — useful when only one subject can
+      # ever match (e.g. AllowSelf).
       sig { returns(T::Boolean) }
       def single_match?
         @single_match || false
@@ -125,7 +123,6 @@ module Sequel
   end
 end
 
-# Type aliases for use throughout the gem
 module Sequel
   module Privacy
     TPolicy = T.type_alias { Sequel::Privacy::Policy }

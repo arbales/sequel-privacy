@@ -20,21 +20,13 @@ module Sequel
       extend T::Sig
       extend T::Helpers
 
-      # PolicyDSL is meant to be `extend`ed onto another Module, so `self`
-      # at runtime is always a Module that responds to `const_set`.
+      # `extend`ed onto another Module, so `self` at runtime is always a
+      # Module that responds to `const_set`.
       requires_ancestor { Module }
 
-      # Define a new policy constant on the extending module.
-      #
-      # @param name [Symbol] The policy name (will become a constant)
-      # @param lam [Proc] The policy lambda (0-3 args: actor, subject, direct_object)
-      # @param comment [String, nil] Human-readable description
-      # @param cacheable [Boolean] Whether results can be cached (default: true)
-      # @param single_match [Boolean] Whether only one subject/actor can match (default: false)
-      # @param cache_by [Symbol, Array<Symbol>, nil] Override cache-key
-      #   dimensions. See Sequel::Privacy::Policy#setup for details.
-      # @param allow_anonymous [Boolean] Skip auto-deny for nil actor.
-      #   See Sequel::Privacy::Policy#setup for details.
+      # Define a policy constant on the extending module. See
+      # `Sequel::Privacy::Policy#setup` for the meaning of `cacheable`,
+      # `single_match`, `cache_by`, and `allow_anonymous`.
       sig do
         params(
           name: Symbol,
