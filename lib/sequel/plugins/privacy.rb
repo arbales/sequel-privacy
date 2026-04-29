@@ -148,17 +148,24 @@ module Sequel
           :@allow_unsafe_access => nil
         )
 
-        # Allows the model to be accessed without a ViewerContext,
-        # useful when you're migrating an existing codebase or adopting gradually.
-        sig { void }
-        def allow_unsafe_access!
+        # Allows the model to be accessed without a ViewerContext, useful when
+        # you're migrating an existing codebase or adopting gradually.
+        # You can prevent this from applying to certain fields or associations by
+        # passing `except:`.
+        sig { params(except: T::Array[Symbol]).void }
+        def allow_unsafe_access!(except: [])
           @allow_unsafe_access = T.let(true, T.nilable(T::Boolean))
+          @unsafe_access_except = T.let(except.map(&:to_sym), T.nilable(T::Array[Symbol]))
           Sequel::Privacy.logger&.warn("#{self} allows unsafe access - migrate to use for_vc()")
         end
 
-        sig { returns(T::Boolean) }
-        def allow_unsafe_access?
-          @allow_unsafe_access == true
+        # Checks if the model or a field/association allows unsafe access.
+        sig { params(name: T.nilable(Symbol)).returns(T::Boolean) }
+        def allow_unsafe_access?(name = nil)
+          return false unless @allow_unsafe_access == true
+          return true if name.nil?
+
+          !(@unsafe_access_except || []).include?(name)
         end
 
         # Per-class thread-local key carrying the current VC during row
@@ -246,7 +253,7 @@ module Sequel
             vc = instance_variable_get(:@viewer_context)
 
             unless vc
-              return original_method.bind(self).() if T.unsafe(self.class).allow_unsafe_access?
+              return original_method.bind(self).() if T.unsafe(self.class).allow_unsafe_access?(field)
 
               Kernel.raise Sequel::Privacy::MissingViewerContext,
                            "#{self.class}##{field} requires a ViewerContext"
@@ -406,6 +413,12 @@ module Sequel
 
           define_method(name) do
             vc = instance_variable_get(:@viewer_context)
+
+            if vc.nil? && !T.unsafe(self.class).allow_unsafe_access?(name)
+              Kernel.raise Sequel::Privacy::MissingViewerContext,
+                           "#{self.class}##{name} requires a ViewerContext"
+            end
+
             assoc_class ||= assoc_reflection.associated_class
 
             obj = if vc && assoc_class.respond_to?(:privacy_vc_key)
@@ -444,6 +457,12 @@ module Sequel
 
           define_method(name) do
             vc = instance_variable_get(:@viewer_context)
+
+            if vc.nil? && !T.unsafe(self.class).allow_unsafe_access?(name)
+              Kernel.raise Sequel::Privacy::MissingViewerContext,
+                           "#{self.class}##{name} requires a ViewerContext"
+            end
+
             assoc_class ||= assoc_reflection.associated_class
 
             objs = if vc && assoc_class.respond_to?(:privacy_vc_key)
@@ -475,8 +494,8 @@ module Sequel
           end
         end
 
-        sig { params(_assoc_name: Symbol, singular_name: Symbol, policies: T::Array[T.untyped]).void }
-        def _wrap_association_add(_assoc_name, singular_name, policies)
+        sig { params(assoc_name: Symbol, singular_name: Symbol, policies: T::Array[T.untyped]).void }
+        def _wrap_association_add(assoc_name, singular_name, policies)
           method_name = :"add_#{singular_name}"
           original = instance_method(method_name)
 
@@ -484,7 +503,7 @@ module Sequel
             vc = instance_variable_get(:@viewer_context)
 
             unless vc
-              return original.bind(self).(obj) if T.unsafe(self.class).allow_unsafe_access?
+              return original.bind(self).(obj) if T.unsafe(self.class).allow_unsafe_access?(assoc_name)
 
               Kernel.raise Sequel::Privacy::MissingViewerContext,
                            "Cannot #{method_name} without a viewer context"
@@ -506,8 +525,8 @@ module Sequel
           end
         end
 
-        sig { params(_assoc_name: Symbol, singular_name: Symbol, policies: T::Array[T.untyped]).void }
-        def _wrap_association_remove(_assoc_name, singular_name, policies)
+        sig { params(assoc_name: Symbol, singular_name: Symbol, policies: T::Array[T.untyped]).void }
+        def _wrap_association_remove(assoc_name, singular_name, policies)
           method_name = :"remove_#{singular_name}"
           original = instance_method(method_name)
 
@@ -515,7 +534,7 @@ module Sequel
             vc = instance_variable_get(:@viewer_context)
 
             unless vc
-              return original.bind(self).(obj) if T.unsafe(self.class).allow_unsafe_access?
+              return original.bind(self).(obj) if T.unsafe(self.class).allow_unsafe_access?(assoc_name)
 
               Kernel.raise Sequel::Privacy::MissingViewerContext,
                            "Cannot #{method_name} without a viewer context"
@@ -537,8 +556,8 @@ module Sequel
           end
         end
 
-        sig { params(_assoc_name: Symbol, plural_name: Symbol, policies: T::Array[T.untyped]).void }
-        def _wrap_association_remove_all(_assoc_name, plural_name, policies)
+        sig { params(assoc_name: Symbol, plural_name: Symbol, policies: T::Array[T.untyped]).void }
+        def _wrap_association_remove_all(assoc_name, plural_name, policies)
           method_name = :"remove_all_#{plural_name}"
           original = instance_method(method_name)
 
@@ -546,7 +565,7 @@ module Sequel
             vc = instance_variable_get(:@viewer_context)
 
             unless vc
-              return original.bind(self).() if T.unsafe(self.class).allow_unsafe_access?
+              return original.bind(self).() if T.unsafe(self.class).allow_unsafe_access?(assoc_name)
 
               Kernel.raise Sequel::Privacy::MissingViewerContext,
                            "Cannot #{method_name} without a viewer context"

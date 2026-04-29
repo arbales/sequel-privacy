@@ -468,6 +468,118 @@ RSpec.describe Sequel::Plugins::Privacy do
         result = unsafe_class.first
         expect(result).not_to be_nil
       end
+
+      describe 'allow_unsafe_access! with except:' do
+        let(:strict_field_class) do
+          allow_owner = allow_owner_policy
+          deny = deny_policy
+
+          Class.new(Sequel::Model(:privacy_test_items)) do
+            plugin :privacy
+            allow_unsafe_access! except: %i[secret_field]
+
+            policies :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow, deny
+            policies :view_secret_field, allow_owner, deny
+
+            protect_field :secret_field
+          end
+        end
+
+        it 'allows the model to load without VC' do
+          strict_field_class.create(name: 'Strict', secret_field: 'shh', owner_id: 1)
+          expect { strict_field_class.where(name: 'Strict').first }.not_to raise_error
+        end
+
+        it 'still gates fields named in except: when no VC is attached' do
+          strict_field_class.create(name: 'Strict', secret_field: 'shh', owner_id: 1)
+          loaded = strict_field_class.where(name: 'Strict').first
+
+          expect { loaded.secret_field }.to raise_error(Sequel::Privacy::MissingViewerContext)
+
+          # Sanity: name is not in except: and reads freely.
+          expect(loaded.name).to eq('Strict')
+        end
+
+        it 'returns the field value when a VC is attached and policy allows' do
+          strict_field_class.create(name: 'Strict', secret_field: 'shh', owner_id: 1)
+          loaded = strict_field_class.where(name: 'Strict').first
+          loaded.for_vc(vc)
+          expect(loaded.secret_field).to eq('shh')
+        end
+
+        it 'gates plural associations named in except: when no VC' do
+          DB.create_table?(:privacy_unsafe_parents) do
+            primary_key :id
+            String :name
+          end
+          DB.create_table?(:privacy_unsafe_kids) do
+            primary_key :id
+            Integer :parent_id
+            String :name
+          end
+
+          unsafe_kid_class = Class.new(Sequel::Model(:privacy_unsafe_kids)) do
+            plugin :privacy
+            allow_unsafe_access!
+            policies :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+          end
+
+          kid_klass = unsafe_kid_class
+          parent_class = Class.new(Sequel::Model(:privacy_unsafe_parents)) do
+            plugin :privacy
+            allow_unsafe_access! except: %i[kids]
+            policies :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+
+            one_to_many :kids, class: kid_klass, key: :parent_id
+          end
+
+          parent = parent_class.create(name: 'P')
+          unsafe_kid_class.create(parent_id: parent.id, name: 'K')
+          loaded = parent_class.first
+
+          expect { loaded.kids }.to raise_error(Sequel::Privacy::MissingViewerContext)
+
+          DB.drop_table?(:privacy_unsafe_kids)
+          DB.drop_table?(:privacy_unsafe_parents)
+        end
+
+        it 'still permits associations not named in except:' do
+          DB.create_table?(:privacy_loose_parents) do
+            primary_key :id
+            String :name
+          end
+          DB.create_table?(:privacy_loose_kids) do
+            primary_key :id
+            Integer :parent_id
+            String :name
+          end
+
+          loose_kid_class = Class.new(Sequel::Model(:privacy_loose_kids)) do
+            plugin :privacy
+            allow_unsafe_access!
+            policies :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+          end
+
+          kid_klass = loose_kid_class
+          parent_class = Class.new(Sequel::Model(:privacy_loose_parents)) do
+            plugin :privacy
+            allow_unsafe_access! except: %i[other_assoc]
+            policies :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+
+            one_to_many :kids, class: kid_klass, key: :parent_id
+          end
+
+          parent = parent_class.create(name: 'P')
+          loose_kid_class.create(parent_id: parent.id, name: 'K')
+          loaded = parent_class.first
+
+          expect { loaded.kids }.not_to raise_error
+          expect(loaded.kids.length).to eq(1)
+
+          DB.drop_table?(:privacy_loose_kids)
+          DB.drop_table?(:privacy_loose_parents)
+        end
+      end
     end
   end
 
