@@ -49,14 +49,14 @@ GEM
     sequel (5.100.0)
       bigdecimal
     sexp_processor (4.17.5)
-    sorbet (0.6.12897)
-      sorbet-static (= 0.6.12897)
-    sorbet-runtime (0.6.12897)
-    sorbet-static (0.6.12897-universal-darwin)
-    sorbet-static (0.6.12897-x86_64-linux)
-    sorbet-static-and-runtime (0.6.12897)
-      sorbet (= 0.6.12897)
-      sorbet-runtime (= 0.6.12897)
+    sorbet (0.6.13169)
+      sorbet-static (= 0.6.13169)
+    sorbet-runtime (0.6.13169)
+    sorbet-static (0.6.13169-universal-darwin)
+    sorbet-static (0.6.13169-x86_64-linux)
+    sorbet-static-and-runtime (0.6.13169)
+      sorbet (= 0.6.13169)
+      sorbet-runtime (= 0.6.13169)
     spoom (1.7.11)
       erubi (>= 1.10.0)
       prism (>= 0.28.0)
@@ -80,7 +80,7 @@ GEM
       yard-sorbet
     thor (1.5.0)
     tsort (0.2.0)
-    yard (0.9.38)
+    yard (0.9.43)
     yard-sorbet (0.9.0)
       sorbet-runtime
       yard
