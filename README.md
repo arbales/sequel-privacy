@@ -180,6 +180,33 @@ policy :MyPolicy, ->() { ... },
 
 **`allow_anonymous: true`**: Skip the auto-deny for nil actor. Use for state-gate policies that examine only the subject (e.g. "post is published").
 
+### Policy Factories
+
+Use `policy_factory` when a policy needs definition-time arguments, while still receiving the normal runtime policy arguments (`actor`, `subject`, `direct_object`) during enforcement.
+
+```ruby
+module P
+  extend Sequel::Privacy::PolicyDSL
+
+  policy_factory :AllowIfActorMeetsFieldVisibility, ->(visibility_field) {
+    ->(actor, subject) {
+      allow if actor.meets_visibility?(subject.public_send(visibility_field))
+    }
+  }
+end
+
+class Member < Sequel::Model
+  plugin :privacy
+
+  privacy do
+    can :view, P::AllowMembers
+    field :phone, P::AllowIfActorMeetsFieldVisibility(:phone_visibility)
+  end
+end
+```
+
+Policy factories accept the same options as `policy`. The factory must return a Proc, and each call returns a concrete `Policy` instance with its own cache identity.
+
 ### Policy Combinators
 
 Use `all()` to require multiple conditions:

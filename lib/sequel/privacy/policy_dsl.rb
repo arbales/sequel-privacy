@@ -50,6 +50,35 @@ module Sequel
         )
         const_set(name, p)
       end
+
+      sig do
+        params(
+          name: Symbol,
+          factory: Proc,
+          comment: T.nilable(String),
+          cacheable: T::Boolean,
+          single_match: T::Boolean,
+          cache_by: T.nilable(T.any(Symbol, T::Array[Symbol])),
+          allow_anonymous: T::Boolean
+        ).void
+      end
+      def policy_factory(name, factory, comment = nil, cacheable: true, single_match: false, cache_by: nil,
+                         allow_anonymous: false)
+        policy_factory = PolicyFactory.new(
+          name,
+          factory,
+          comment: comment,
+          cacheable: cacheable,
+          single_match: single_match,
+          cache_by: cache_by,
+          allow_anonymous: allow_anonymous
+        )
+
+        const_set(name, policy_factory)
+        define_singleton_method(name) do |*args|
+          policy_factory.call(*args)
+        end
+      end
     end
   end
 end

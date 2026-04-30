@@ -199,6 +199,51 @@ RSpec.describe Sequel::Plugins::Privacy do
         expect(test_class.privacy_policies[:view_secret_field].length).to eq(1)
       end
 
+      it 'accepts policies produced by policy factories' do
+        policies = Module.new do
+          extend Sequel::Privacy::PolicyDSL
+
+          policy_factory :AllowIfConfiguredFieldVisible, ->(field) {
+            ->(_actor, subject) { allow if subject.public_send(field) == 'visible' }
+          }
+        end
+
+        test_class = Class.new(Sequel::Model(:privacy_test_items)) do
+          plugin :privacy
+
+          privacy do
+            can :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+            field :name, policies::AllowIfConfiguredFieldVisible(:secret_field)
+          end
+        end
+
+        visible = test_class.new(name: 'Visible name', secret_field: 'visible', owner_id: 1).for_vc(vc)
+        hidden = test_class.new(name: 'Hidden name', secret_field: 'hidden', owner_id: 1).for_vc(vc)
+
+        expect(visible.name).to eq('Visible name')
+        expect(hidden.name).to be_nil
+      end
+
+      it 'raises a useful error when a policy factory is registered without arguments' do
+        policies = Module.new do
+          extend Sequel::Privacy::PolicyDSL
+
+          policy_factory :AllowIfConfiguredFieldVisible, ->(field) {
+            ->(_actor, subject) { allow if subject.public_send(field) == 'visible' }
+          }
+        end
+
+        test_class = Class.new(Sequel::Model(:privacy_test_items)) do
+          plugin :privacy
+        end
+
+        expect {
+          test_class.privacy do
+            field :name, policies::AllowIfConfiguredFieldVisible
+          end
+        }.to raise_error(ArgumentError, /Policy factory AllowIfConfiguredFieldVisible must be called with arguments/)
+      end
+
       it 'prevents changes after finalization' do
         ao = allow_owner_p
         test_class = Class.new(Sequel::Model(:privacy_test_items)) do

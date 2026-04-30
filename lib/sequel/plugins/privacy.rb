@@ -126,6 +126,8 @@ module Sequel
             case p
             when Sequel::Privacy::Policy, Proc
               p
+            when Sequel::Privacy::PolicyFactory
+              Kernel.raise ArgumentError, "Policy factory #{p.factory_name} must be called with arguments"
             else
               Kernel.raise ArgumentError, "Invalid policy: #{p.inspect}"
             end

@@ -69,4 +69,51 @@ RSpec.describe Sequel::Privacy::PolicyDSL do
       expect(host_module::DenyAll.policy_name).to eq('DenyAll')
     end
   end
+
+  describe '#policy_factory' do
+    it 'defines a PolicyFactory as a constant on the extending module' do
+      host_module.policy_factory(:AllowField, ->(field) { ->(_actor, subject) { :allow if subject.public_send(field) } })
+
+      expect(host_module.const_defined?(:AllowField)).to be true
+      expect(host_module.const_get(:AllowField)).to be_a(Sequel::Privacy::PolicyFactory)
+    end
+
+    it 'defines a callable module method that returns a Policy' do
+      host_module.policy_factory(:AllowField, ->(field) { ->(_actor, subject) { :allow if subject.public_send(field) } })
+
+      policy = host_module::AllowField(:visible)
+
+      expect(policy).to be_a(Sequel::Privacy::Policy)
+      expect(policy.policy_name).to eq('AllowField(:visible)')
+      expect(policy.arity).to eq(2)
+    end
+
+    it 'forwards policy options to produced policies' do
+      host_module.policy_factory(
+        :AllowField,
+        ->(_field) { ->(_actor, _subject) { :allow } },
+        'Permit based on a configured field',
+        cacheable: false,
+        single_match: true,
+        cache_by: :actor,
+        allow_anonymous: true
+      )
+
+      policy = host_module::AllowField(:visible)
+
+      expect(policy.comment).to eq('Permit based on a configured field')
+      expect(policy.cacheable?).to be false
+      expect(policy.single_match?).to be true
+      expect(policy.cache_by).to eq([:actor])
+      expect(policy.allow_anonymous?).to be true
+    end
+
+    it 'raises when the factory does not return a Proc' do
+      host_module.policy_factory(:InvalidFactory, ->(_field) { :allow })
+
+      expect {
+        host_module::InvalidFactory(:visible)
+      }.to raise_error(ArgumentError, /must return a Proc/)
+    end
+  end
 end
