@@ -45,6 +45,20 @@ RSpec.describe Sequel::Privacy::Enforcer do
         expect(result).to be false
       end
 
+      it 'logs automatic AlwaysDeny append at debug level' do
+        logger = double('logger')
+        debug_messages = []
+
+        allow(logger).to receive(:debug) { |&block| debug_messages << block.call }
+        allow(logger).to receive(:warn)
+        allow(Sequel::Privacy).to receive(:logger).and_return(logger)
+
+        described_class.enforce([pass_policy], subject_obj, vc)
+
+        expect(logger).not_to have_received(:warn)
+        expect(debug_messages).to include('Policy chain should end with AlwaysDeny. Appending it.')
+      end
+
       it 'returns false for empty policy list' do
         result = described_class.enforce([], subject_obj, vc)
         expect(result).to be false

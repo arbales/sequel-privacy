@@ -68,6 +68,20 @@ RSpec.describe Sequel::Privacy::PolicyDSL do
       expect(host_module::AllowAll.policy_name).to eq('AllowAll')
       expect(host_module::DenyAll.policy_name).to eq('DenyAll')
     end
+
+    it 'defines policies on nested modules' do
+      root = Module.new
+      groups = Module.new do
+        extend Sequel::Privacy::PolicyDSL
+
+        policy :AllowGroups, -> { :allow }
+      end
+      root.const_set(:Groups, groups)
+
+      expect(root::Groups::AllowGroups).to be_a(Sequel::Privacy::Policy)
+      expect(root::Groups::AllowGroups.policy_name).to eq('AllowGroups')
+      expect(root::Groups::AllowGroups.call).to eq(:allow)
+    end
   end
 
   describe '#policy_factory' do
@@ -114,6 +128,21 @@ RSpec.describe Sequel::Privacy::PolicyDSL do
       expect {
         host_module::InvalidFactory(:visible)
       }.to raise_error(ArgumentError, /must return a Proc/)
+    end
+
+    it 'defines callable policy factories on nested modules' do
+      root = Module.new
+      groups = Module.new do
+        extend Sequel::Privacy::PolicyDSL
+
+        policy_factory :AllowField, ->(field) { ->(_actor, subject) { :allow if subject.public_send(field) } }
+      end
+      root.const_set(:Groups, groups)
+
+      policy = root::Groups::AllowField(:visible)
+
+      expect(policy).to be_a(Sequel::Privacy::Policy)
+      expect(policy.policy_name).to eq('AllowField(:visible)')
     end
   end
 end

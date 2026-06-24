@@ -61,7 +61,7 @@ module Sequel
 
           # Fail-secure: every chain ends with AlwaysDeny.
           unless policies.last == BuiltInPolicies::AlwaysDeny
-            logger&.warn { 'Policy chain should end with AlwaysDeny. Appending it.' }
+            logger&.debug { 'Policy chain should end with AlwaysDeny. Appending it.' }
             policies = policies.dup << BuiltInPolicies::AlwaysDeny
           end
 
