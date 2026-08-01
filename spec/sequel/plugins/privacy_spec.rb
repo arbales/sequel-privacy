@@ -736,6 +736,42 @@ RSpec.describe Sequel::Plugins::Privacy do
     end
 
     describe 'one_to_many associations' do
+      it 'attaches the dataset VC through associations defined before the plugin is loaded' do
+        protected_child_class = Class.new(Sequel::Model(:privacy_children)) do
+          plugin :privacy
+          allow_unsafe_access! except: %i[name]
+
+          privacy do
+            can :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+            field :name, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+          end
+        end
+
+        child_klass = protected_child_class
+        late_plugin_parent_class = Class.new(Sequel::Model(:privacy_parents)) do
+          one_to_many :children, class: child_klass, key: :parent_id
+
+          plugin :privacy
+          privacy do
+            can :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+          end
+        end
+
+        parent = late_plugin_parent_class.create(name: 'Parent', owner_id: 1)
+        protected_child_class.create(name: 'Child', parent_id: parent.id, owner_id: 1)
+
+        loaded_parent = late_plugin_parent_class.for_vc(vc).all.first
+        child = loaded_parent.children.first
+
+        expect(child.viewer_context).to eq(vc)
+        expect(child.name).to eq('Child')
+
+        eager_loaded_parent = late_plugin_parent_class.for_vc(vc).eager(:children).all.first
+        eager_loaded_child = eager_loaded_parent.associations.fetch(:children).first
+
+        expect(eager_loaded_child.viewer_context).to eq(vc)
+      end
+
       it 'filters children based on :view policy' do
         # Create parent owned by actor 1
         parent = parent_class.create(name: 'Parent', owner_id: 1)

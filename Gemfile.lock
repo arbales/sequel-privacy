@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    sequel-privacy (0.5.7)
+    sequel-privacy (0.6)
       sequel (~> 5.0)
       sorbet-runtime (~> 0.5)
 

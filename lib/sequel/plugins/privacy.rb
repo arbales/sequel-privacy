@@ -43,10 +43,15 @@ module Sequel
         model.instance_variable_set(:@privacy_association_policies, {})
         model.instance_variable_set(:@privacy_finalized, false)
         model.instance_variable_set(:@allow_unsafe_access, false)
+        model.instance_variable_set(:@privacy_wrapped_association_reflections, {})
       end
 
       sig { params(model: T.class_of(Sequel::Model), opts: T::Hash[Symbol, T.untyped]).void }
-      def self.configure(model, opts = {}); end
+      def self.configure(model, opts = {})
+        model.all_association_reflections.each do |reflection|
+          model.send(:_setup_privacy_association_readers, reflection[:type], reflection[:name], true)
+        end
+      end
 
       class AssociationPrivacyDSL
         extend T::Sig
@@ -146,6 +151,7 @@ module Sequel
           :@privacy_policies => :dup,
           :@privacy_fields => :dup,
           :@privacy_association_policies => :dup,
+          :@privacy_wrapped_association_reflections => :dup,
           :@privacy_finalized => nil,
           :@allow_unsafe_access => nil
         )
@@ -350,6 +356,51 @@ module Sequel
           opts = _inject_privacy_eager_block(opts)
           result = super
 
+          _setup_privacy_association_readers(type, name, false)
+
+          result
+        end
+
+        # Inject an :eager_block that wraps the eager-load dataset with
+        # `for_vc` when a VC is propagated via EAGER_VC_KEY (see
+        # DatasetMethods#post_load). Preserves any user-supplied block.
+        sig { params(opts: T::Hash[Symbol, T.untyped]).returns(T::Hash[Symbol, T.untyped]) }
+        def _inject_privacy_eager_block(opts)
+          opts.merge(eager_block: _privacy_eager_block(opts[:eager_block]))
+        end
+
+        sig { params(original: T.untyped).returns(Proc) }
+        def _privacy_eager_block(original)
+          wrapped = proc do |ds|
+            ds = original.call(ds) if original
+            vc = Thread.current[DatasetMethods::EAGER_VC_KEY]
+            if vc && T.unsafe(ds).model.respond_to?(:privacy_vc_key)
+              T.unsafe(ds).for_vc(vc)
+            else
+              ds
+            end
+          end
+          wrapped
+        end
+
+        private
+
+        sig { params(type: Symbol, name: Symbol, inject_eager_block: T::Boolean).void }
+        def _setup_privacy_association_readers(type, name, inject_eager_block)
+          reflection = association_reflection(name)
+          return unless reflection
+
+          @privacy_wrapped_association_reflections ||= T.let(
+            {},
+            T.nilable(T::Hash[Symbol, T.untyped])
+          )
+          wrapped = @privacy_wrapped_association_reflections
+          return if wrapped[name].equal?(reflection)
+
+          if inject_eager_block
+            reflection[:eager_block] = _privacy_eager_block(reflection[:eager_block])
+          end
+
           case type
           when :many_to_one, :one_to_one
             _override_singular_association(name)
@@ -360,28 +411,8 @@ module Sequel
             setup_association_privacy(name) if privacy_association_policies[name]
           end
 
-          result
+          wrapped[name] = reflection
         end
-
-        # Inject an :eager_block that wraps the eager-load dataset with
-        # `for_vc` when a VC is propagated via EAGER_VC_KEY (see
-        # DatasetMethods#post_load). Preserves any user-supplied block.
-        sig { params(opts: T::Hash[Symbol, T.untyped]).returns(T::Hash[Symbol, T.untyped]) }
-        def _inject_privacy_eager_block(opts)
-          original = opts[:eager_block]
-          wrapped = proc do |ds|
-            ds = original.call(ds) if original
-            vc = Thread.current[DatasetMethods::EAGER_VC_KEY]
-            if vc && T.unsafe(ds).model.respond_to?(:privacy_vc_key)
-              T.unsafe(ds).for_vc(vc)
-            else
-              ds
-            end
-          end
-          opts.merge(eager_block: wrapped)
-        end
-
-        private
 
         sig { params(name: Symbol).void }
         def _override_association_dataset(name)
