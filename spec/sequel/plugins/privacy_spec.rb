@@ -772,6 +772,87 @@ RSpec.describe Sequel::Plugins::Privacy do
         expect(eager_loaded_child.viewer_context).to eq(vc)
       end
 
+      it 'keeps propagating the VC after Sorbet replaces its runtime wrapper' do
+        protected_child_class = Class.new(Sequel::Model(:privacy_children)) do
+          plugin :privacy
+          allow_unsafe_access! except: %i[name]
+
+          privacy do
+            can :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+            field :name, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+          end
+        end
+
+        child_klass = protected_child_class
+        signed_parent_class = Class.new(Sequel::Model(:privacy_parents)) do
+          extend T::Sig
+          one_to_many :children, class: child_klass, key: :parent_id
+
+          sig { returns(T::Array[child_klass]) }
+          def children
+            super
+          end
+
+          plugin :privacy
+          privacy do
+            can :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+          end
+        end
+
+        parent = signed_parent_class.create(name: 'Parent', owner_id: 1)
+        protected_child_class.create(name: 'Child', parent_id: parent.id, owner_id: 1)
+
+        # The first invocation replaces Sorbet's initial validation wrapper.
+        signed_parent_class.for_vc(vc)[parent.id].children
+
+        child = signed_parent_class.for_vc(vc)[parent.id].children.first
+
+        expect(child.viewer_context).to equal(vc)
+        expect { child.name }.not_to raise_error
+      end
+
+      it 'keeps privacy wrappers ahead of association methods replaced later' do
+        replacement_calls = []
+        late_parent_class = parent_class
+
+        late_parent_class.define_method(:children) do |*args, &block|
+          replacement_calls << :reader
+          super(*args, &block)
+        end
+        late_parent_class.define_method(:children_dataset) do |*args, &block|
+          replacement_calls << :dataset
+          super(*args, &block)
+        end
+
+        parent = late_parent_class.create(name: 'Parent', owner_id: 1)
+        child_class.create(name: 'Child', parent_id: parent.id, owner_id: 1)
+        loaded_parent = late_parent_class.for_vc(vc)[parent.id]
+
+        expect(loaded_parent.children.first.viewer_context).to equal(vc)
+        expect(loaded_parent.children_dataset.first.viewer_context).to equal(vc)
+        expect(replacement_calls).to contain_exactly(:reader, :dataset)
+      end
+
+      it 'uses a separate wrapper module for subclass associations' do
+        child_klass = child_class
+        subclass = Class.new(parent_class) do
+          one_to_one :primary_child, class: child_klass, key: :parent_id
+        end
+
+        parent_wrapper = parent_class.send(:privacy_association_wrapper)
+        subclass_wrapper = subclass.send(:privacy_association_wrapper)
+
+        expect(subclass_wrapper).not_to equal(parent_wrapper)
+        expect(subclass.ancestors.first).to equal(subclass_wrapper)
+
+        parent = subclass.create(name: 'Parent', owner_id: 1)
+        child_class.create(name: 'Child', parent_id: parent.id, owner_id: 1)
+        loaded_parent = subclass.for_vc(vc)[parent.id]
+
+        expect(loaded_parent.children.first.viewer_context).to equal(vc)
+        expect(loaded_parent.primary_child.viewer_context).to equal(vc)
+      end
+
       it 'filters children based on :view policy' do
         # Create parent owned by actor 1
         parent = parent_class.create(name: 'Parent', owner_id: 1)
@@ -872,9 +953,23 @@ RSpec.describe Sequel::Plugins::Privacy do
           child_class.create(name: 'Other Child', parent_id: parent.id, owner_id: 99)
 
           loaded = parent_class.for_vc(vc).eager(:children).all.first
+          raw_names = loaded.associations.fetch(:children).map(&:name)
           names = loaded.children.map(&:name)
 
+          expect(raw_names).to contain_exactly('Owned Child', 'Other Child')
           expect(names).to contain_exactly('Owned Child')
+        end
+
+        it 'keeps the eager-load marker across thread boundaries' do
+          dataset = child_class.for_vc(vc).clone(privacy_eager_load: true, async: true)
+          values = {id: 123, name: 'Other Child', parent_id: 456, owner_id: 99}
+
+          child = Thread.new { dataset.row_proc.call(values) }.value
+
+          expect(dataset.opts[:privacy_eager_load]).to be true
+          expect(dataset.opts[:async]).to be true
+          expect(child).to be_a(child_class)
+          expect(child.viewer_context).to equal(vc)
         end
 
         it 'attaches the VC to each eager-loaded child' do
@@ -1019,6 +1114,110 @@ RSpec.describe Sequel::Plugins::Privacy do
 
           expect(by_name['P1']&.street).to eq('mine')
           expect(by_name['P2']).to be_nil
+        end
+
+        it 'evaluates ownership through the populated reciprocal without extra queries' do
+          owner_through_member = Sequel::Privacy::Policy.create(
+            :owner_through_member,
+            ->(actor, mailing_address) {
+              allow if mailing_address.member.owner_id == actor.id
+            }
+          )
+
+          mailing_address_class = Class.new(Sequel::Model(:privacy_addresses)) do
+            plugin :privacy
+            privacy do
+              can :view, owner_through_member
+            end
+          end
+          member_class = Class.new(Sequel::Model(:privacy_parents)) do
+            plugin :privacy
+            privacy do
+              can :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+            end
+          end
+
+          member_class.one_to_one :mailing_address,
+            class: mailing_address_class,
+            key: :parent_id
+          mailing_address_class.many_to_one :member,
+            class: member_class,
+            key: :parent_id
+
+          mine = member_class.create(name: 'Mine', owner_id: 1)
+          theirs = member_class.create(name: 'Theirs', owner_id: 99)
+          mailing_address_class.create(street: 'mine', parent_id: mine.id, owner_id: 99)
+          mailing_address_class.create(street: 'theirs', parent_id: theirs.id, owner_id: 1)
+
+          sql_logger = Class.new do
+            attr_reader :sqls
+
+            def initialize
+              @sqls = []
+            end
+
+            def info(message)
+              @sqls << message
+            end
+          end.new
+
+          DB.loggers << sql_logger
+          begin
+            loaded = member_class.for_vc(vc).order(:id).eager(:mailing_address).all
+            eager_query_count = sql_logger.sqls.length
+            raw_addresses = loaded.map { |member| member.associations.fetch(:mailing_address) }
+
+            expect(raw_addresses.map { |address| address.associations.fetch(:member) }).to eq(loaded)
+
+            by_name = loaded.to_h { |member| [member.name, member.mailing_address] }
+
+            expect(by_name['Mine']&.street).to eq('mine')
+            expect(by_name['Theirs']).to be_nil
+            expect(eager_query_count).to eq(2)
+            expect(sql_logger.sqls.length).to eq(eager_query_count)
+          ensure
+            DB.loggers.delete(sql_logger)
+          end
+        end
+
+        it 'defers privacy enforcement through nested eager loading' do
+          owner_policy = allow_owner_policy
+          nested_address_class = Class.new(Sequel::Model(:privacy_addresses)) do
+            plugin :privacy
+            privacy do
+              can :view, owner_policy
+            end
+          end
+          nested_child_class = Class.new(Sequel::Model(:privacy_children)) do
+            plugin :privacy
+            privacy do
+              can :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+            end
+          end
+          nested_parent_class = Class.new(Sequel::Model(:privacy_parents)) do
+            plugin :privacy
+            privacy do
+              can :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+            end
+          end
+
+          nested_parent_class.one_to_many :children,
+            class: nested_child_class,
+            key: :parent_id
+          nested_child_class.one_to_one :address,
+            class: nested_address_class,
+            key: :parent_id,
+            primary_key: :parent_id
+
+          parent = nested_parent_class.create(name: 'Parent', owner_id: 1)
+          nested_child_class.create(name: 'Child', parent_id: parent.id, owner_id: 1)
+          nested_address_class.create(street: 'Hidden', parent_id: parent.id, owner_id: 99)
+
+          loaded = nested_parent_class.for_vc(vc).eager(children: :address).all.first
+          child = loaded.children.first
+
+          expect(child.associations.fetch(:address)).to be_a(nested_address_class)
+          expect(child.address).to be_nil
         end
       end
     end
@@ -1208,6 +1407,49 @@ RSpec.describe Sequel::Plugins::Privacy do
         end
       end
 
+      let(:signed_group_class) do
+        self_add = allow_self_add
+        self_remove = allow_self_remove
+        admin_action = allow_admin_action
+        admin_remove_all = allow_admin_remove_all
+        user_klass = user_class
+
+        Class.new(Sequel::Model(:privacy_groups)) do
+          extend T::Sig
+
+          many_to_many :members, class: user_klass,
+            join_table: :privacy_group_members,
+            left_key: :group_id,
+            right_key: :user_id
+
+          sig { params(member: user_klass).returns(T.untyped) }
+          def add_member(member)
+            super
+          end
+
+          sig { params(member: user_klass).returns(T.untyped) }
+          def remove_member(member)
+            super
+          end
+
+          sig { returns(T.untyped) }
+          def remove_all_members
+            super
+          end
+
+          plugin :privacy
+          privacy do
+            can :view, Sequel::Privacy::BuiltInPolicies::AlwaysAllow
+
+            association :members do
+              can :add, admin_action, self_add
+              can :remove, admin_action, self_remove
+              can :remove_all, admin_remove_all
+            end
+          end
+        end
+      end
+
       it 'attaches VC to records loaded through many_to_many association datasets' do
         user = user_class.create(name: 'Test User', role: 'member')
         group = group_class.create(name: 'Test Group')
@@ -1221,6 +1463,23 @@ RSpec.describe Sequel::Plugins::Privacy do
       end
 
       describe 'add_* method' do
+        it 'keeps enforcing policy after Sorbet replaces its runtime wrapper' do
+          admin = user_class.create(name: 'Admin', role: 'admin')
+          actor = user_class.create(name: 'Actor', role: 'member')
+          first_target = user_class.create(name: 'First Target', role: 'member')
+          denied_target = user_class.create(name: 'Denied Target', role: 'member')
+          group = signed_group_class.create(name: 'Test Group')
+
+          admin_vc = Sequel::Privacy::ViewerContext.for_actor(admin)
+          signed_group_class.for_vc(admin_vc)[group.id].add_member(first_target)
+
+          actor_vc = Sequel::Privacy::ViewerContext.for_actor(actor)
+          loaded_group = signed_group_class.for_vc(actor_vc)[group.id]
+
+          expect { loaded_group.add_member(denied_target) }.to raise_error(Sequel::Privacy::Unauthorized)
+          expect(DB[:privacy_group_members].where(group_id: group.id, user_id: denied_target.id).count).to eq(0)
+        end
+
         it 'allows user to add themselves' do
           user = user_class.create(name: 'Test User', role: 'member')
           group = group_class.create(name: 'Test Group')
@@ -1300,6 +1559,25 @@ RSpec.describe Sequel::Plugins::Privacy do
       end
 
       describe 'remove_* method' do
+        it 'keeps enforcing policy after Sorbet replaces its runtime wrapper' do
+          admin = user_class.create(name: 'Admin', role: 'admin')
+          actor = user_class.create(name: 'Actor', role: 'member')
+          first_target = user_class.create(name: 'First Target', role: 'member')
+          denied_target = user_class.create(name: 'Denied Target', role: 'member')
+          group = signed_group_class.create(name: 'Test Group')
+          DB[:privacy_group_members].insert(group_id: group.id, user_id: first_target.id)
+          DB[:privacy_group_members].insert(group_id: group.id, user_id: denied_target.id)
+
+          admin_vc = Sequel::Privacy::ViewerContext.for_actor(admin)
+          signed_group_class.for_vc(admin_vc)[group.id].remove_member(first_target)
+
+          actor_vc = Sequel::Privacy::ViewerContext.for_actor(actor)
+          loaded_group = signed_group_class.for_vc(actor_vc)[group.id]
+
+          expect { loaded_group.remove_member(denied_target) }.to raise_error(Sequel::Privacy::Unauthorized)
+          expect(DB[:privacy_group_members].where(group_id: group.id, user_id: denied_target.id).count).to eq(1)
+        end
+
         it 'allows user to remove themselves' do
           user = user_class.create(name: 'Test User', role: 'member')
           group = group_class.create(name: 'Test Group')
@@ -1351,6 +1629,24 @@ RSpec.describe Sequel::Plugins::Privacy do
       end
 
       describe 'remove_all_* method' do
+        it 'keeps enforcing policy after Sorbet replaces its runtime wrapper' do
+          admin = user_class.create(name: 'Admin', role: 'admin')
+          actor = user_class.create(name: 'Actor', role: 'member')
+          member = user_class.create(name: 'Member', role: 'member')
+          group = signed_group_class.create(name: 'Test Group')
+          DB[:privacy_group_members].insert(group_id: group.id, user_id: member.id)
+
+          admin_vc = Sequel::Privacy::ViewerContext.for_actor(admin)
+          signed_group_class.for_vc(admin_vc)[group.id].remove_all_members
+          DB[:privacy_group_members].insert(group_id: group.id, user_id: member.id)
+
+          actor_vc = Sequel::Privacy::ViewerContext.for_actor(actor)
+          loaded_group = signed_group_class.for_vc(actor_vc)[group.id]
+
+          expect { loaded_group.remove_all_members }.to raise_error(Sequel::Privacy::Unauthorized)
+          expect(DB[:privacy_group_members].where(group_id: group.id, user_id: member.id).count).to eq(1)
+        end
+
         it 'allows admin to remove all members' do
           admin = user_class.create(name: 'Admin', role: 'admin')
           user1 = user_class.create(name: 'User 1', role: 'member')

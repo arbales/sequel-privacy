@@ -371,19 +371,29 @@ module Sequel
 
         sig { params(original: T.untyped).returns(Proc) }
         def _privacy_eager_block(original)
-          wrapped = proc do |ds|
-            ds = original.call(ds) if original
+          wrapped = proc do |dataset|
+            dataset = original.call(dataset) if original
             vc = Thread.current[DatasetMethods::EAGER_VC_KEY]
-            if vc && T.unsafe(ds).model.respond_to?(:privacy_vc_key)
-              T.unsafe(ds).for_vc(vc)
+            if vc && T.unsafe(dataset).model.respond_to?(:privacy_vc_key)
+              T.unsafe(dataset).for_vc(vc).clone(privacy_eager_load: true)
             else
-              ds
+              dataset
             end
           end
           wrapped
         end
 
         private
+
+        sig { returns(T::Module[T.anything]) }
+        def privacy_association_wrapper
+          wrapper = @privacy_association_wrapper ||= T.let(
+            Module.new,
+            T.nilable(T::Module[T.anything])
+          )
+          prepend(wrapper) unless ancestors.include?(wrapper)
+          wrapper
+        end
 
         sig { params(type: Symbol, name: Symbol, inject_eager_block: T::Boolean).void }
         def _setup_privacy_association_readers(type, name, inject_eager_block)
@@ -419,12 +429,11 @@ module Sequel
           dataset_method = :"#{name}_dataset"
           return unless method_defined?(dataset_method)
 
-          original = instance_method(dataset_method)
           assoc_reflection = association_reflection(name)
           assoc_class = T.let(nil, T.nilable(T.class_of(Sequel::Model)))
 
-          define_method(dataset_method) do |*args|
-            ds = original.bind(self).(*args)
+          privacy_association_wrapper.define_method(dataset_method) do |*args, &block|
+            ds = super(*args, &block)
             vc = instance_variable_get(:@viewer_context)
             return ds unless vc
 
@@ -439,12 +448,11 @@ module Sequel
 
         sig { params(name: Symbol).void }
         def _override_singular_association(name)
-          original = instance_method(name)
           assoc_reflection = association_reflection(name)
           # Resolve lazily to handle forward references between models.
           assoc_class = T.let(nil, T.nilable(T.class_of(Sequel::Model)))
 
-          define_method(name) do
+          privacy_association_wrapper.define_method(name) do |*args, &block|
             vc = instance_variable_get(:@viewer_context)
 
             if vc.nil? && !T.unsafe(self.class).allow_unsafe_access?(name)
@@ -459,12 +467,12 @@ module Sequel
                     old_vc = Thread.current[vc_key]
                     Thread.current[vc_key] = vc
                     begin
-                      original.bind(self).()
+                      super(*args, &block)
                     ensure
                       Thread.current[vc_key] = old_vc
                     end
                   else
-                    original.bind(self).()
+                    super(*args, &block)
                   end
 
             return nil unless obj
@@ -484,11 +492,10 @@ module Sequel
 
         sig { params(name: Symbol).void }
         def _override_plural_association(name)
-          original = instance_method(name)
           assoc_reflection = association_reflection(name)
           assoc_class = T.let(nil, T.nilable(T.class_of(Sequel::Model)))
 
-          define_method(name) do
+          privacy_association_wrapper.define_method(name) do |*args, &block|
             vc = instance_variable_get(:@viewer_context)
 
             if vc.nil? && !T.unsafe(self.class).allow_unsafe_access?(name)
@@ -503,12 +510,12 @@ module Sequel
                      old_vc = Thread.current[vc_key]
                      Thread.current[vc_key] = vc
                      begin
-                       original.bind(self).()
+                       super(*args, &block)
                      ensure
                        Thread.current[vc_key] = old_vc
                      end
                    else
-                     original.bind(self).()
+                     super(*args, &block)
                    end
 
             return objs unless vc
@@ -530,13 +537,13 @@ module Sequel
         sig { params(assoc_name: Symbol, singular_name: Symbol, policies: T::Array[T.untyped]).void }
         def _wrap_association_add(assoc_name, singular_name, policies)
           method_name = :"add_#{singular_name}"
-          original = instance_method(method_name)
 
-          define_method(method_name) do |obj|
+          privacy_association_wrapper.define_method(method_name) do |*args, &block|
+            obj = args.first
             vc = instance_variable_get(:@viewer_context)
 
             unless vc
-              return original.bind(self).(obj) if T.unsafe(self.class).allow_unsafe_access?(assoc_name)
+              return super(*args, &block) if T.unsafe(self.class).allow_unsafe_access?(assoc_name)
 
               Kernel.raise Sequel::Privacy::MissingViewerContext,
                            "Cannot #{method_name} without a viewer context"
@@ -554,20 +561,20 @@ module Sequel
                            "Cannot #{method_name} on #{self.class}"
             end
 
-            original.bind(self).(obj)
+            super(*args, &block)
           end
         end
 
         sig { params(assoc_name: Symbol, singular_name: Symbol, policies: T::Array[T.untyped]).void }
         def _wrap_association_remove(assoc_name, singular_name, policies)
           method_name = :"remove_#{singular_name}"
-          original = instance_method(method_name)
 
-          define_method(method_name) do |obj|
+          privacy_association_wrapper.define_method(method_name) do |*args, &block|
+            obj = args.first
             vc = instance_variable_get(:@viewer_context)
 
             unless vc
-              return original.bind(self).(obj) if T.unsafe(self.class).allow_unsafe_access?(assoc_name)
+              return super(*args, &block) if T.unsafe(self.class).allow_unsafe_access?(assoc_name)
 
               Kernel.raise Sequel::Privacy::MissingViewerContext,
                            "Cannot #{method_name} without a viewer context"
@@ -585,20 +592,19 @@ module Sequel
                            "Cannot #{method_name} on #{self.class}"
             end
 
-            original.bind(self).(obj)
+            super(*args, &block)
           end
         end
 
         sig { params(assoc_name: Symbol, plural_name: Symbol, policies: T::Array[T.untyped]).void }
         def _wrap_association_remove_all(assoc_name, plural_name, policies)
           method_name = :"remove_all_#{plural_name}"
-          original = instance_method(method_name)
 
-          define_method(method_name) do
+          privacy_association_wrapper.define_method(method_name) do |*args, &block|
             vc = instance_variable_get(:@viewer_context)
 
             unless vc
-              return original.bind(self).() if T.unsafe(self.class).allow_unsafe_access?(assoc_name)
+              return super(*args, &block) if T.unsafe(self.class).allow_unsafe_access?(assoc_name)
 
               Kernel.raise Sequel::Privacy::MissingViewerContext,
                            "Cannot #{method_name} without a viewer context"
@@ -616,7 +622,7 @@ module Sequel
                            "Cannot #{method_name} on #{self.class}"
             end
 
-            original.bind(self).()
+            super(*args, &block)
           end
         end
       end
@@ -747,8 +753,9 @@ module Sequel
         # can retreive. Materializes the model, and then checks the view
         # policy. If the model is being materialized within the context of
         # checking a policy this is bypassed, because policies often need to
-        # check data that a VC might not have permission to see. The check is also
-        # bypassed for eager loads, and checked on the association.
+        # check data that a VC might not have permission to see. For eager
+        # association loads, enforcement is deferred until association access so
+        # Sequel can finish attachment and populate reciprocal caches first.
         sig { returns(T.untyped) }
         def row_proc
           vc = opts[:viewer_context]
@@ -768,8 +775,8 @@ module Sequel
             next nil if instance.nil?
 
             instance.instance_variable_set(:@viewer_context, vc)
+            next instance if opts[:privacy_eager_load]
             next instance if Sequel::Privacy::Enforcer.in_policy_eval?
-            next instance if Thread.current[EAGER_VC_KEY]
 
             if T.cast(instance, InstanceMethods).allow?(vc, :view)
               instance
