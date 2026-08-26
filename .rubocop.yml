@@ -2,6 +2,7 @@ AllCops:
   TargetRubyVersion: 3.4
   NewCops: enable
   Exclude:
+    - spec/**/*
     - sorbet/**/*
     - vendor/**/*
     - fragments/**/*

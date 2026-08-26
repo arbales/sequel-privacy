@@ -29,4 +29,6 @@ Gem::Specification.new do |spec|
   spec.add_development_dependency 'sqlite3', '~> 1.4'
   spec.add_development_dependency 'sorbet', '~> 0.5'
   spec.add_development_dependency 'tapioca', '~> 0.17'
+  spec.add_development_dependency 'rubocop'
+
 end
