@@ -87,3 +87,51 @@ RSpec.describe Sequel::Privacy::AllPowerfulVC do
     expect(vc).not_to respond_to(:actor)
   end
 end
+
+RSpec.describe Sequel::Privacy::TransientViewerContext do
+  let(:vc) { Sequel::Privacy::ViewerContext.omniscient(:bootstrap) }
+
+  describe '#use' do
+    it 'yields the context and its reason' do
+      expect { |b| vc.use(&b) }.to yield_with_args(vc, :bootstrap)
+    end
+
+    it 'returns the block value' do
+      expect(vc.use { |_vc, _reason| :loaded }).to eq(:loaded)
+    end
+
+    it 'invalidates the context once the block returns' do
+      vc.use { |_vc, _reason| nil }
+      expect(vc).to be_invalidated
+    end
+
+    it 'invalidates the context even when the block raises' do
+      expect { vc.use { |_vc, _reason| raise 'boom' } }.to raise_error('boom')
+      expect(vc).to be_invalidated
+    end
+
+    it 'is available on all-powerful contexts' do
+      all_powerful = Sequel::Privacy::ViewerContext.all_powerful(:migration)
+      all_powerful.use { |_vc, _reason| nil }
+
+      expect(all_powerful).to be_invalidated
+    end
+  end
+
+  describe '#invalidate!' do
+    it 'is idempotent' do
+      expect { 2.times { vc.invalidate! } }.not_to raise_error
+      expect(vc).to be_invalidated
+    end
+
+    it 'makes assert_usable! raise' do
+      vc.invalidate!
+      expect { vc.assert_usable! }.to raise_error(Sequel::Privacy::InvalidatedViewerContext, /OmniscientVC/)
+    end
+
+    it 'leaves a fresh context usable' do
+      expect(vc).not_to be_invalidated
+      expect { vc.assert_usable! }.not_to raise_error
+    end
+  end
+end

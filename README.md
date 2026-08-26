@@ -260,30 +260,34 @@ admin_vc = Sequel::Privacy::ViewerContext.all_powerful(:admin_migration)
 
 ### Login, Sessions & `current_user` and `current_vc`
 
-Unless you allow unsafe access to your User (or equivalent) model, you will need 
-a way to load it and create a ViewerContext for them. An Omniscient ViewerContext 
-is useful for this. Be sure to properly set to an Actor VC after you've logged-in 
-or materialized a user from the session. 
+Unless you allow unsafe access to your User (or equivalent) model, you will need
+a way to load it and create a ViewerContext for them. An Omniscient ViewerContext
+is useful for this.
 
 ```ruby
-# You can use an omniscient viewer context to load the user from a session
-# or however you store them. Discard this viewer context when you're done with it.
-def current_user 
+def current_user
   return @current_user if @current_user
-  login_vc = Sequel::Privacy::ViewerContext.omniscient(:login)
-  user = User.for_vc(login_vc)[session_user_id]
-  return nil unless user
 
-  # Attach an ActorVC to the loaded user so that future calls to its fields and 
-  # associations respect privacy .
-  @current_user ||= user.for_vc(Sequel::Privacy::ViewerContext.for_actor(user))
+  @current_user = Sequel::Privacy::ViewerContext.omniscient(:login).use do |vc, reason|
+    user = User.for_vc(vc)[session_user_id]
+    next nil unless user
+
+    # Give the row its own ActorVC, so its fields and associations respect
+    # privacy from here on — and so it can be written to. An OmniscientVC reads
+    # anything but refuses to mutate.
+    user.reset_viewer_context(Sequel::Privacy::ViewerContext.for_actor(user), reason)
+  end
 end
 
 def current_vc
   current_user&.viewer_context || Sequel::Privacy::ViewerContext.anonymous()
 end
-
 ```
+
+*Warning:* Skipping the reset leaves you holding an object that cannot be
+saved, but any association or field reads on it will be allowed. So you should always
+discard the OmniVC / APVCs used for things like this and call `reset_viewer_context` 
+with a more appropriate one as soon as you can.
 
 ## Mutation Enforcement
 

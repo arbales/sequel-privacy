@@ -15,6 +15,9 @@ module Sequel
     # Raised when an invalid viewer context is used
     class InvalidViewerContextError < StandardError; end
 
+    # Raised if #invalidates was called on this VC.
+    class InvalidatedViewerContext < InvalidViewerContextError; end
+
     class MissingViewerContext < StandardError; end
 
     # Raised when attempting to modify privacy settings after finalization

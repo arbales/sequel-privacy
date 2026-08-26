@@ -41,6 +41,54 @@ module Sequel
       def self.anonymous
         AnonymousVC.new
       end
+
+      sig { returns(T::Boolean) }
+      def invalidated?
+        @invalidated = T.let(@invalidated, T.nilable(T::Boolean))
+        @invalidated || false
+      end
+
+      sig { void }
+      def assert_usable!
+        return unless invalidated?
+
+        Kernel.raise InvalidatedViewerContext,
+                     "#{self.class.name.to_s.split('::').last} was invalidated and cannot be used again"
+      end
+    end
+
+    # Made available on OmniscientVC and AllPowerfulVCs. Transient contexts are
+    # invalidated when the use block exists. To help you keep these around for
+    # as short a time as possible.
+    module TransientViewerContext
+      extend T::Sig
+      extend T::Helpers
+
+      abstract!
+      requires_ancestor { ViewerContext }
+
+      sig { abstract.returns(Symbol) }
+      def reason; end
+
+      sig do
+        type_parameters(:U)
+          .params(block: T.proc.params(vc: T.untyped, reason: Symbol).returns(T.type_parameter(:U)))
+          .returns(T.type_parameter(:U))
+      end
+      def use(&block)
+        block.call(self, reason)
+      ensure
+        invalidate!
+      end
+
+      sig { returns(T.self_type) }
+      def invalidate!
+        unless invalidated?
+          Sequel::Privacy.logger&.debug("Invalidating viewer context: #{reason}")
+          @invalidated = T.let(true, T.nilable(T::Boolean))
+        end
+        self
+      end
     end
 
     # Standard viewer context with an actor (user/member)
@@ -65,6 +113,7 @@ module Sequel
     # Requires a reason for audit logging.
     class AllPowerfulVC < ViewerContext
       extend T::Sig
+      include TransientViewerContext
 
       sig { params(reason: Symbol).void }
       def initialize(reason)
@@ -72,7 +121,7 @@ module Sequel
         super()
       end
 
-      sig { returns(Symbol) }
+      sig { override.returns(Symbol) }
       attr_reader :reason
     end
 
@@ -80,6 +129,7 @@ module Sequel
     # Used for system operations like authentication lookups.
     class OmniscientVC < ViewerContext
       extend T::Sig
+      include TransientViewerContext
 
       sig { params(reason: Symbol).void }
       def initialize(reason)
@@ -87,7 +137,7 @@ module Sequel
         super()
       end
 
-      sig { returns(Symbol) }
+      sig { override.returns(Symbol) }
       attr_reader :reason
     end
 

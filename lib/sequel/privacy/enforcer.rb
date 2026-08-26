@@ -38,6 +38,8 @@ module Sequel
         ).returns(T::Boolean)
       end
       def self.enforce(policies, subject, viewer_context, direct_object = nil)
+        viewer_context.assert_usable!
+
         saved = Thread.current[EVAL_KEY]
         Thread.current[EVAL_KEY] = true
 

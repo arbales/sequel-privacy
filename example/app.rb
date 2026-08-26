@@ -29,14 +29,15 @@ class App < Roda
     Sequel::Privacy.clear_cache!
 
     # Since User is privacy-aware, you'll need to use an omniscient Viewer Context
-    # in order to load it even for login.
+    # in order to load it even for login. Omni and AllPowerful VCs have a `#use` method
+    # that automatically invalidates them on the way out.
     @current_user = r.params['session_user_id']&.to_i&.then { |id|
-      u = User.for_vc(Sequel::Privacy::ViewerContext.omniscient(:for_login))[id]
-      next nil unless u
+      Sequel::Privacy::ViewerContext.omniscient(:for_login).use do |vc, reason|
+        u = User.for_vc(vc)[id]
+        next nil unless u
 
-      # Attach an ActorVC to the loaded user so that subsequent calls to it
-      # load using the appropriate context.
-      u.for_vc(Sequel::Privacy::ViewerContext.for_actor(u))
+        u.reset_viewer_context(Sequel::Privacy::ViewerContext.for_actor(u), reason)
+      end
     }
 
     # If there is not a current_user, then provide an anonymous viewer_context to load

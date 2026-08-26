@@ -639,13 +639,12 @@ module Sequel
           @viewer_context = T.let(@viewer_context, T.nilable(Sequel::Privacy::ViewerContext))
         end
 
-        sig { params(vc: T.nilable(Sequel::Privacy::ViewerContext)).returns(T.nilable(Sequel::Privacy::ViewerContext)) }
-        def viewer_context=(vc)
-          @viewer_context = T.let(vc, T.nilable(Sequel::Privacy::ViewerContext))
-        end
 
-        sig { params(vc: Sequel::Privacy::ViewerContext).returns(T.self_type) }
-        def for_vc(vc)
+        sig { params(vc: Sequel::Privacy::ViewerContext, reason: Symbol).returns(T.self_type) }
+        def reset_viewer_context(vc, reason)
+          Sequel::Privacy.logger&.debug do
+            "Resetting viewer context on #{self.class}[#{pk}] to #{vc.class.name.to_s.split('::').last} (#{reason})"
+          end
           @viewer_context = T.let(vc, T.nilable(Sequel::Privacy::ViewerContext))
           self
         end

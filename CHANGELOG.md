@@ -1,13 +1,14 @@
 # Changelog
 
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.1.0] - 2024-01-24
+## [0.7.0] – 2026-08-26
+- Removed `#for_vc` on `Sequel::Model` instances. Instead, call `#reset_viewer_context(vc, reason)`.
+- Removed `#viewer_context=` from `Sequel::Model` instances.
+- Added `#use(&block)` to Omniscient and AllPowerful viewer contexts. The block receives the viewer context and the reason it was created.
+
+## [0.1.0]
 
 ### Added
 - Initial release

@@ -217,8 +217,8 @@ RSpec.describe Sequel::Plugins::Privacy do
           end
         end
 
-        visible = test_class.new(name: 'Visible name', secret_field: 'visible', owner_id: 1).for_vc(vc)
-        hidden = test_class.new(name: 'Hidden name', secret_field: 'hidden', owner_id: 1).for_vc(vc)
+        visible = test_class.for_vc(vc).new(name: 'Visible name', secret_field: 'visible', owner_id: 1)
+        hidden = test_class.for_vc(vc).new(name: 'Hidden name', secret_field: 'hidden', owner_id: 1)
 
         expect(visible.name).to eq('Visible name')
         expect(hidden.name).to be_nil
@@ -281,15 +281,35 @@ RSpec.describe Sequel::Plugins::Privacy do
     let(:owned_instance) { test_class.new(name: 'Test', owner_id: 1) }
     let(:other_instance) { test_class.new(name: 'Other', owner_id: 99) }
 
-    describe '#for_vc' do
-      it 'attaches viewer context to instance' do
-        result = owned_instance.for_vc(vc)
-        expect(owned_instance.viewer_context).to eq(vc)
+    describe '#reset_viewer_context' do
+      let(:bootstrap_vc) { Sequel::Privacy::ViewerContext.omniscient(:bootstrap) }
+      # Mirrors a bootstrap load: materialized under a privileged context that
+      # it is not supposed to keep.
+      let(:bootstrapped) { test_class.for_vc(bootstrap_vc).new(name: 'Test', owner_id: 1) }
+
+      it 'replaces the attached viewer context' do
+        expect(bootstrapped.viewer_context).to eq(bootstrap_vc)
+
+        bootstrapped.reset_viewer_context(vc, :bootstrap)
+        expect(bootstrapped.viewer_context).to eq(vc)
       end
 
       it 'returns self for chaining' do
-        result = owned_instance.for_vc(vc)
-        expect(result).to eq(owned_instance)
+        expect(bootstrapped.reset_viewer_context(vc, :bootstrap)).to eq(bootstrapped)
+      end
+
+      it 'leaves the instance usable after the bootstrap context is invalidated' do
+        bootstrapped.reset_viewer_context(vc, :bootstrap)
+        bootstrap_vc.invalidate!
+
+        expect { bootstrapped.allow?(vc, :view) }.not_to raise_error
+      end
+
+      it 'does not rescue an instance that was never reset' do
+        bootstrap_vc.invalidate!
+
+        expect { bootstrapped.allow?(bootstrap_vc, :view) }
+          .to raise_error(Sequel::Privacy::InvalidatedViewerContext)
       end
     end
 
@@ -299,7 +319,7 @@ RSpec.describe Sequel::Plugins::Privacy do
       end
 
       it 'returns attached viewer context' do
-        owned_instance.for_vc(vc)
+        owned_instance.reset_viewer_context(vc, :spec)
         expect(owned_instance.viewer_context).to eq(vc)
       end
     end
@@ -361,13 +381,13 @@ RSpec.describe Sequel::Plugins::Privacy do
       let(:instance) { field_class.new(name: 'Test', secret_field: 'secret', owner_id: 1) }
 
       it 'returns field value when policy allows' do
-        instance.for_vc(vc)
+        instance.reset_viewer_context(vc, :spec)
         expect(instance.secret_field).to eq('secret')
       end
 
       it 'returns nil when policy denies' do
         other_vc = Sequel::Privacy::ViewerContext.for_actor(TestActor.new(99))
-        instance.for_vc(other_vc)
+        instance.reset_viewer_context(other_vc, :spec)
         expect(instance.secret_field).to be_nil
       end
 
@@ -415,27 +435,27 @@ RSpec.describe Sequel::Plugins::Privacy do
 
       it 'allows save when :create policy passes for new record' do
         instance = saveable_class.new(name: 'Test', owner_id: 1)
-        instance.for_vc(admin_vc)
+        instance.reset_viewer_context(admin_vc, :spec)
         expect { instance.save }.not_to raise_error
       end
 
       it 'raises Unauthorized when :create policy fails' do
         instance = saveable_class.new(name: 'Test', owner_id: 1)
-        instance.for_vc(vc)
+        instance.reset_viewer_context(vc, :spec)
         expect { instance.save }.to raise_error(Sequel::Privacy::Unauthorized, /Cannot create/)
       end
 
       it 'allows save when :edit policy passes for existing record' do
         # Create without privacy check
         instance = saveable_class.create(name: 'Test', owner_id: 1)
-        instance.for_vc(vc)
+        instance.reset_viewer_context(vc, :spec)
         instance.name = 'Updated'
         expect { instance.save }.not_to raise_error
       end
 
       it 'raises Unauthorized when :edit policy fails for existing record' do
         instance = saveable_class.create(name: 'Test', owner_id: 99)
-        instance.for_vc(vc)
+        instance.reset_viewer_context(vc, :spec)
         instance.name = 'Updated'
         expect { instance.save }.to raise_error(Sequel::Privacy::Unauthorized, /Cannot edit/)
       end
@@ -548,7 +568,7 @@ RSpec.describe Sequel::Plugins::Privacy do
         it 'returns the field value when a VC is attached and policy allows' do
           strict_field_class.create(name: 'Strict', secret_field: 'shh', owner_id: 1)
           loaded = strict_field_class.where(name: 'Strict').first
-          loaded.for_vc(vc)
+          loaded.reset_viewer_context(vc, :spec)
           expect(loaded.secret_field).to eq('shh')
         end
 
@@ -862,7 +882,7 @@ RSpec.describe Sequel::Plugins::Privacy do
         child_class.create(name: 'Other Child', parent_id: parent.id, owner_id: 99)
 
         # Attach VC and access children
-        parent.for_vc(vc)
+        parent.reset_viewer_context(vc, :spec)
         children = parent.children
 
         # Should only see the child owned by actor 1
@@ -910,7 +930,7 @@ RSpec.describe Sequel::Plugins::Privacy do
         parent = parent_class.create(name: 'Parent', owner_id: 1)
         child_class.create(name: 'Child', parent_id: parent.id, owner_id: 1)
 
-        parent.for_vc(vc)
+        parent.reset_viewer_context(vc, :spec)
         child = parent.children.first
 
         expect(child.viewer_context).to eq(vc)
@@ -920,7 +940,7 @@ RSpec.describe Sequel::Plugins::Privacy do
         parent = parent_class.create(name: 'Parent', owner_id: 1)
         child_class.create(name: 'Owned Child', parent_id: parent.id, owner_id: 1)
 
-        parent.for_vc(vc)
+        parent.reset_viewer_context(vc, :spec)
         child = parent.children_dataset.first
 
         expect(child.viewer_context).to eq(vc)
@@ -930,7 +950,7 @@ RSpec.describe Sequel::Plugins::Privacy do
         parent = parent_class.create(name: 'Parent', owner_id: 1)
         child_class.create(name: 'Other Child', parent_id: parent.id, owner_id: 99)
 
-        parent.for_vc(vc)
+        parent.reset_viewer_context(vc, :spec)
 
         expect(parent.children_dataset.first).to be_nil
       end
@@ -940,7 +960,7 @@ RSpec.describe Sequel::Plugins::Privacy do
         child_class.create(name: 'Child 1', parent_id: parent.id, owner_id: 1)
         child_class.create(name: 'Child 2', parent_id: parent.id, owner_id: 99)
 
-        parent.for_vc(all_powerful_vc)
+        parent.reset_viewer_context(all_powerful_vc, :spec)
         children = parent.children
 
         expect(children.length).to eq(2)
@@ -1030,7 +1050,7 @@ RSpec.describe Sequel::Plugins::Privacy do
         parent = parent_class.create(name: 'Parent', owner_id: 1)
         address_class.create(street: '123 Main St', parent_id: parent.id, owner_id: 1)
 
-        parent.for_vc(vc)
+        parent.reset_viewer_context(vc, :spec)
         address = parent.address
 
         expect(address).not_to be_nil
@@ -1041,7 +1061,7 @@ RSpec.describe Sequel::Plugins::Privacy do
         parent = parent_class.create(name: 'Parent', owner_id: 1)
         address_class.create(street: '123 Main St', parent_id: parent.id, owner_id: 99)
 
-        parent.for_vc(vc)
+        parent.reset_viewer_context(vc, :spec)
         address = parent.address
 
         expect(address).to be_nil
@@ -1086,7 +1106,7 @@ RSpec.describe Sequel::Plugins::Privacy do
         parent = parent_class.create(name: 'Parent', owner_id: 1)
         address_class.create(street: '123 Main St', parent_id: parent.id, owner_id: 1)
 
-        parent.for_vc(vc)
+        parent.reset_viewer_context(vc, :spec)
         address = parent.address
 
         expect(address.viewer_context).to eq(vc)
@@ -1096,7 +1116,7 @@ RSpec.describe Sequel::Plugins::Privacy do
         parent = parent_class.create(name: 'Parent', owner_id: 1)
         address_class.create(street: '123 Main St', parent_id: parent.id, owner_id: 99)
 
-        parent.for_vc(all_powerful_vc)
+        parent.reset_viewer_context(all_powerful_vc, :spec)
         address = parent.address
 
         expect(address).not_to be_nil
@@ -1254,7 +1274,7 @@ RSpec.describe Sequel::Plugins::Privacy do
         child_class.create(name: 'Other Child', parent_id: parent.id, owner_id: 99)
 
         # Attach VC to parent (as would happen when loaded via for_vc)
-        parent.for_vc(vc)
+        parent.reset_viewer_context(vc, :spec)
 
         # The policy should be able to see ALL children (not just actor 1's)
         # to correctly determine that actor 1 IS a member
@@ -1274,7 +1294,7 @@ RSpec.describe Sequel::Plugins::Privacy do
         test_class.policies :view, error_policy, deny
 
         parent = test_class.create(name: 'Test', owner_id: 1)
-        parent.for_vc(vc)
+        parent.reset_viewer_context(vc, :spec)
 
         expect { parent.allow?(vc, :view) }.to raise_error('Policy error')
         expect(parent.viewer_context).to eq(vc)
@@ -1297,7 +1317,7 @@ RSpec.describe Sequel::Plugins::Privacy do
         test_class.policies :edit, deny
 
         parent = test_class.create(name: 'Task List', owner_id: 1)
-        parent.for_vc(vc)
+        parent.reset_viewer_context(vc, :spec)
 
         # If nested non-view checks were bypassed, this would incorrectly allow.
         expect(parent.allow?(vc, :view)).to be false
@@ -1456,7 +1476,7 @@ RSpec.describe Sequel::Plugins::Privacy do
         DB[:privacy_group_members].insert(group_id: group.id, user_id: user.id)
 
         user_vc = Sequel::Privacy::ViewerContext.for_actor(user)
-        group.for_vc(user_vc)
+        group.reset_viewer_context(user_vc, :spec)
         member = group.members_dataset.first
 
         expect(member.viewer_context).to eq(user_vc)
@@ -1485,7 +1505,7 @@ RSpec.describe Sequel::Plugins::Privacy do
           group = group_class.create(name: 'Test Group')
 
           user_vc = Sequel::Privacy::ViewerContext.for_actor(user)
-          group.for_vc(user_vc)
+          group.reset_viewer_context(user_vc, :spec)
 
           expect { group.add_member(user) }.not_to raise_error
           expect(group.members.map(&:id)).to include(user.id)
@@ -1497,7 +1517,7 @@ RSpec.describe Sequel::Plugins::Privacy do
           group = group_class.create(name: 'Test Group')
 
           user1_vc = Sequel::Privacy::ViewerContext.for_actor(user1)
-          group.for_vc(user1_vc)
+          group.reset_viewer_context(user1_vc, :spec)
 
           expect { group.add_member(user2) }.to raise_error(Sequel::Privacy::Unauthorized)
         end
@@ -1508,7 +1528,7 @@ RSpec.describe Sequel::Plugins::Privacy do
           group = group_class.create(name: 'Test Group')
 
           admin_vc = Sequel::Privacy::ViewerContext.for_actor(admin)
-          group.for_vc(admin_vc)
+          group.reset_viewer_context(admin_vc, :spec)
 
           expect { group.add_member(user) }.not_to raise_error
           expect(group.members.map(&:id)).to include(user.id)
@@ -1552,7 +1572,7 @@ RSpec.describe Sequel::Plugins::Privacy do
           group = group_class.create(name: 'Test Group')
 
           omni_vc = Sequel::Privacy::ViewerContext.omniscient(:test)
-          group.for_vc(omni_vc)
+          group.reset_viewer_context(omni_vc, :spec)
 
           expect { group.add_member(user) }.to raise_error(Sequel::Privacy::Unauthorized)
         end
@@ -1585,7 +1605,7 @@ RSpec.describe Sequel::Plugins::Privacy do
           DB[:privacy_group_members].insert(group_id: group.id, user_id: user.id)
 
           user_vc = Sequel::Privacy::ViewerContext.for_actor(user)
-          group.for_vc(user_vc)
+          group.reset_viewer_context(user_vc, :spec)
 
           expect { group.remove_member(user) }.not_to raise_error
           expect(group.members.map(&:id)).not_to include(user.id)
@@ -1599,7 +1619,7 @@ RSpec.describe Sequel::Plugins::Privacy do
           DB[:privacy_group_members].insert(group_id: group.id, user_id: user2.id)
 
           user1_vc = Sequel::Privacy::ViewerContext.for_actor(user1)
-          group.for_vc(user1_vc)
+          group.reset_viewer_context(user1_vc, :spec)
 
           expect { group.remove_member(user2) }.to raise_error(Sequel::Privacy::Unauthorized)
         end
@@ -1612,7 +1632,7 @@ RSpec.describe Sequel::Plugins::Privacy do
           DB[:privacy_group_members].insert(group_id: group.id, user_id: user.id)
 
           admin_vc = Sequel::Privacy::ViewerContext.for_actor(admin)
-          group.for_vc(admin_vc)
+          group.reset_viewer_context(admin_vc, :spec)
 
           expect { group.remove_member(user) }.not_to raise_error
           expect(group.members.map(&:id)).not_to include(user.id)
@@ -1657,7 +1677,7 @@ RSpec.describe Sequel::Plugins::Privacy do
           DB[:privacy_group_members].insert(group_id: group.id, user_id: user2.id)
 
           admin_vc = Sequel::Privacy::ViewerContext.for_actor(admin)
-          group.for_vc(admin_vc)
+          group.reset_viewer_context(admin_vc, :spec)
 
           expect { group.remove_all_members }.not_to raise_error
           expect(group.members).to be_empty
@@ -1670,7 +1690,7 @@ RSpec.describe Sequel::Plugins::Privacy do
           DB[:privacy_group_members].insert(group_id: group.id, user_id: user.id)
 
           user_vc = Sequel::Privacy::ViewerContext.for_actor(user)
-          group.for_vc(user_vc)
+          group.reset_viewer_context(user_vc, :spec)
 
           expect { group.remove_all_members }.to raise_error(Sequel::Privacy::Unauthorized)
         end
